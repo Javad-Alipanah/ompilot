@@ -57,7 +57,7 @@ OMP 18.4.10 watches global, project, and `--config` YAML live. Advisor/prewalk s
 
 OMPilot uses its own panel and OMP RPC process. Cursor's built-in Agent runtime is not exposed through a supported replacement interface used by this extension. Native Cursor conversation storage, checkpoints, per-turn revert, and its agent panel are separate systems. **Review changes** shows the current SCM diff, not native per-turn checkpoints.
 
-Live checks against OMP 18.4.10 exercised RPC negotiation, command/skill discovery, worker transcripts and steering, cancellation acknowledgement and lifecycle, advisor sidecars, exact-session resume, structured questions, tool approval, and prewalk handoff. All 135 automated host/backend and webview DOM tests pass. The native Cursor window was not visually verified during this build. See [verification details](docs/verification.md) and [architecture notes](docs/architecture.md).
+Live checks against OMP 18.4.10 exercised RPC negotiation, command/skill discovery, worker transcripts and steering, cancellation acknowledgement and lifecycle, advisor sidecars, exact-session resume, structured questions, tool approval, and prewalk handoff. All 136 automated host/backend and webview DOM tests pass. The native Cursor window was not visually verified during this build. See [verification details](docs/verification.md) and [architecture notes](docs/architecture.md).
 
 ## Develop and package
 

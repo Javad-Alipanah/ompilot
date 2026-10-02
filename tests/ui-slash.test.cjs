@@ -152,6 +152,17 @@ test("inline completion replaces the whole slash token when editing within its n
   assert.equal(ui.input.textContent, prefix + "/skill:agents/graphify-windows for this task");
 });
 
+test("completion inside a slash name retains adjacent prose punctuation", () => {
+  const ui = setup();
+  for (const suffix of [", then continue", ".", ") then continue"]) {
+    const prefix = "Please use ";
+    ui.type(prefix + "/graphify" + suffix, prefix.length + 4);
+    ui.catalog([skill]);
+    ui.key("Tab");
+    assert.equal(ui.input.textContent, prefix + "/skill:agents/graphify-windows " + suffix);
+  }
+});
+
 test("slash completion on a later contenteditable line preserves the full multiline prompt", () => {
   const ui = setup();
   ui.input.innerHTML = "<div>Investigate the project.</div><div>Use /graphify for this task</div>";

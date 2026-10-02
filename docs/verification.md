@@ -5,7 +5,7 @@ Checked on 2026-10-02 in Ubuntu WSL with OMP 18.4.10, Bun 1.3.14 and Node 24. Th
 ## Automated checks
 
 - TypeScript compilation: passed.
-- 92 backend/host tests and 43 webview DOM tests: passed (135 total).
+- 92 backend/host tests and 44 webview DOM tests: passed (136 total).
 - Biome error-level check and Git whitespace check: passed.
 - Frozen dependency installation and production VSIX packaging: passed locally.
 

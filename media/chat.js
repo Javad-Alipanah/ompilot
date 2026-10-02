@@ -2585,7 +2585,10 @@
       const query = slash[2] || "";
       const start = before.length - query.length - 1;
       // Editing inside a token replaces its remaining name too, leaving prose intact.
-      const tail = value.slice(cursor).match(/^\S*/)[0];
+      const tail = value
+        .slice(cursor)
+        .match(/^[^\s,;!?()[\]{}"'`<>]*/)[0]
+        .replace(/\.+$/, "");
       return { kind: "command", query: query, start: start, end: cursor + tail.length };
     }
 
