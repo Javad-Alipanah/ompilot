@@ -1084,17 +1084,24 @@ button {
   place-items: center;
   background: color-mix(in srgb, var(--bg) 72%, transparent);
   backdrop-filter: blur(2px);
+  pointer-events: none;
 }
 .drop-overlay[hidden] {
   display: none !important;
 }
 .drop-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   border: 1px dashed color-mix(in srgb, var(--link) 50%, var(--border));
   border-radius: 12px;
   padding: 16px 18px;
   color: var(--text);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   font-size: 13px;
+}
+.drop-card button {
+  pointer-events: auto;
 }
 
 .streaming::after {

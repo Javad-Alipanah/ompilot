@@ -82,7 +82,7 @@
     },
   });
 
-  let dragDepth = 0;
+  let dropHideTimer = null;
   // Follow new output only while the user is already near the bottom.
   let stickToBottom = true;
   let activeTabIdForScroll = "";
@@ -3481,29 +3481,71 @@
 
   function setDropVisible(show) {
     if (dropOverlay == null) return;
-    dropOverlay.hidden = show === false;
+    if (dropHideTimer !== null) window.clearTimeout(dropHideTimer);
+    dropHideTimer = null;
+    dropOverlay.hidden = !show;
+    if (show) {
+      // External drag cancellation can omit dragleave/dragend in an embedded webview.
+      dropHideTimer = window.setTimeout(() => setDropVisible(false), 1000);
+    }
+  }
+
+  function isAttachmentDrag(transfer) {
+    if (!transfer) return false;
+    return (
+      Array.from(transfer.types || []).includes("Files") ||
+      Array.from(transfer.items || []).some((item) => item.kind === "file") ||
+      (transfer.files && transfer.files.length > 0)
+    );
   }
 
   ["dragenter", "dragover"].forEach((evt) => {
     window.addEventListener(evt, (e) => {
+      if (!isAttachmentDrag(e.dataTransfer)) return;
       e.preventDefault();
-      dragDepth += 1;
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
       setDropVisible(true);
     });
   });
   window.addEventListener("dragleave", (e) => {
-    e.preventDefault();
-    dragDepth = Math.max(0, dragDepth - 1);
-    if (dragDepth === 0) setDropVisible(false);
+    if (e.relatedTarget instanceof Node && document.documentElement.contains(e.relatedTarget))
+      return;
+    setDropVisible(false);
   });
   window.addEventListener("drop", async (e) => {
-    e.preventDefault();
-    dragDepth = 0;
     setDropVisible(false);
+    if (!isAttachmentDrag(e.dataTransfer)) return;
+    e.preventDefault();
     if (e.dataTransfer && e.dataTransfer.files) {
       await handleFiles(e.dataTransfer.files);
     }
   });
+  window.addEventListener("dragend", () => setDropVisible(false));
+  window.addEventListener("blur", () => setDropVisible(false));
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) setDropVisible(false);
+  });
+  window.addEventListener("pointerdown", (e) => {
+    if (dropOverlay && !dropOverlay.contains(e.target instanceof Node ? e.target : null))
+      setDropVisible(false);
+  });
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Escape" || !dropOverlay || dropOverlay.hidden) return;
+      setDropVisible(false);
+      e.preventDefault();
+      e.stopPropagation();
+    },
+    true,
+  );
+  const dismissDropBtn = document.getElementById("dismissDropBtn");
+  if (dismissDropBtn) {
+    dismissDropBtn.addEventListener("click", () => {
+      setDropVisible(false);
+      inputEl.focus();
+    });
+  }
 
   if (tabsEl) {
     // Vertical wheel / trackpad gestures scroll the tab strip horizontally.

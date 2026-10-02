@@ -47,6 +47,7 @@
       dismissedError: "",
       loading: false,
       drafts: new Map(),
+      transcriptViews: new Map(),
     };
   }
 
@@ -91,13 +92,23 @@
   const headingText = element("div", "inspector-heading-text");
   headingText.append(agentName, agentMeta);
   const transcriptActions = element("div", "inspector-transcript-actions");
+  transcriptActions.setAttribute("role", "group");
+  transcriptActions.setAttribute("aria-label", "Transcript display and export controls");
+  const collapseButton = button(
+    "Minimize",
+    "toggle-transcript",
+    "Minimize the selected transcript",
+  );
+  collapseButton.setAttribute("aria-controls", "inspector-selected-transcript");
   const copyButton = button("Copy", "copy-transcript", "Copy the complete raw transcript as JSON");
   const exportButton = button("Export", "export", "Export the complete selected transcript");
-  transcriptActions.append(copyButton, exportButton);
+  transcriptActions.append(collapseButton, copyButton, exportButton);
   viewerHeading.append(headingText, transcriptActions);
   const transcriptEl = element("div", "inspector-transcript");
+  transcriptEl.id = "inspector-selected-transcript";
   transcriptEl.dataset.role = "transcript";
   transcriptEl.tabIndex = 0;
+  transcriptEl.setAttribute("role", "region");
   transcriptEl.setAttribute("aria-label", "Transcript messages");
   const controls = element("div", "inspector-controls");
   viewer.append(viewerHeading, transcriptEl, controls);
@@ -121,6 +132,16 @@
 
   function selectedAgent() {
     return state.agents.find((agent) => agent.id === state.selectedId);
+  }
+
+  function selectedTranscriptView() {
+    if (!state.selectedId) return { collapsed: false, scrollTop: 0 };
+    let view = state.transcriptViews.get(state.selectedId);
+    if (!view) {
+      view = { collapsed: false, scrollTop: 0 };
+      state.transcriptViews.set(state.selectedId, view);
+    }
+    return view;
   }
 
   function statusClass(status) {
@@ -321,8 +342,10 @@
     ]);
     if (signature === transcriptSignature) return;
     const sameAgent = renderedAgentId === state.selectedId;
-    const scrollTop = transcriptEl.scrollTop;
-    const nearBottom = transcriptEl.scrollHeight - transcriptEl.clientHeight - scrollTop < 60;
+    const view = selectedTranscriptView();
+    const scrollTop = view.collapsed ? view.scrollTop : transcriptEl.scrollTop;
+    const nearBottom =
+      !view.collapsed && transcriptEl.scrollHeight - transcriptEl.clientHeight - scrollTop < 60;
     const openBlocks = new Set();
     transcriptEl.querySelectorAll("details[open]").forEach((details) => {
       openBlocks.add(details.dataset.blockKey);
@@ -363,6 +386,7 @@
       });
       transcriptEl.scrollTop = nearBottom && scrollTop > 0 ? transcriptEl.scrollHeight : scrollTop;
     } else transcriptEl.scrollTop = 0;
+    if (!view.collapsed) view.scrollTop = transcriptEl.scrollTop;
     renderedAgentId = state.selectedId;
     transcriptSignature = signature;
   }
@@ -470,6 +494,16 @@
       ? `${agent.kind === "advisor" ? "Advisor" : "Worker"} · ${agent.status || "unknown"}${agent.model ? ` · ${agent.model}` : ""}`
       : "";
     agentMeta.title = agent?.sessionFile || "";
+    const view = selectedTranscriptView();
+    transcriptEl.hidden = view.collapsed;
+    collapseButton.hidden = !agent;
+    collapseButton.disabled = !agent;
+    collapseButton.textContent = view.collapsed ? "Expand" : "Minimize";
+    collapseButton.setAttribute("aria-expanded", String(!view.collapsed));
+    collapseButton.setAttribute(
+      "aria-label",
+      `${view.collapsed ? "Expand" : "Minimize"} transcript for ${agent?.name || agent?.id || "selected agent"}`,
+    );
     exportButton.disabled = !agent;
     copyButton.disabled = !agent || state.transcript?.agentId !== state.selectedId;
     renderTranscript();
@@ -506,7 +540,13 @@
       post({ type: "advisorAction", action: action.slice(8) });
     else if (action === "prewalk") post({ type: "prewalkAction" });
     else if (action === "review") post({ type: "reviewChanges" });
-    else if (action === "export" && agent) post({ type: "exportAgentTranscript", id: agent.id });
+    else if (action === "toggle-transcript" && agent) {
+      const view = selectedTranscriptView();
+      if (!view.collapsed) view.scrollTop = transcriptEl.scrollTop;
+      view.collapsed = !view.collapsed;
+      render();
+      if (!view.collapsed) transcriptEl.scrollTop = view.scrollTop;
+    } else if (action === "export" && agent) post({ type: "exportAgentTranscript", id: agent.id });
     else if (action === "copy-transcript" && state.transcript?.agentId === state.selectedId) {
       post({
         type: "copy",

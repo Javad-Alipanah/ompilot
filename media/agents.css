@@ -150,6 +150,9 @@
   padding: 8px;
   overscroll-behavior: contain;
 }
+.inspector-transcript[hidden] {
+  display: none;
+}
 .inspector-message {
   margin-bottom: 14px;
 }

@@ -1,11 +1,11 @@
-# Verification for 0.1.2
+# Verification for 0.1.3
 
 Checked on 2026-10-02 in Ubuntu WSL with OMP 18.4.10, Bun 1.3.14 and Node 24. The Windows editor is Cursor 3.22.12.
 
 ## Automated checks
 
 - TypeScript compilation: passed.
-- 92 backend/host tests and 44 webview DOM tests: passed (136 total).
+- 92 backend/host tests and 55 webview DOM tests: passed (147 total).
 - Biome error-level check and Git whitespace check: passed.
 - Frozen dependency installation and production VSIX packaging: passed locally.
 
@@ -15,9 +15,11 @@ The suite covers RPC framing and process disposal, asynchronous settling and que
 
 Inline slash completion is covered after prose, on later contenteditable lines, with earlier slash tokens, while editing within a token, and with image attachments. Surrounding prompt text stays intact. Slashes within URLs, relative paths and fractions do not trigger the popup. OMP retains responsibility for command invocation syntax.
 
+Drop-overlay regressions cover repeated dragover events, internal element transitions, non-file drags, Escape and button dismissal, cancelled/missing drag events, and real file attachment. Dismissal preserves the draft and sends no agent stop/restart request. Selected transcript tests cover minimizing advisors and workers, update and tab/agent persistence, accessible controls, copy/export, steering drafts, raw block state, and hidden-viewport scroll restoration.
+
 ## Real OMP checks
 
-The baseline checks through 0.1.1 used disposable workspaces and harness-owned sessions to exercise the actual installed runtime. Existing user conversations and configuration were not modified. The 0.1.2 change affects only composer completion and adds DOM regressions; it does not change the OMP transport.
+The baseline checks through 0.1.1 used disposable workspaces and harness-owned sessions to exercise the actual installed runtime. Existing user conversations and configuration were not modified. Changes in 0.1.2 and 0.1.3 affect the webview and add DOM regressions; they do not change the OMP transport. No live OMP sessions were restarted for these UI fixes.
 
 | Check | Observed result |
 | --- | --- |

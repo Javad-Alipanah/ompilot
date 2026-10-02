@@ -187,3 +187,90 @@ test("an inspector action error remains visible through passive refresh until di
   ui.click('[data-action="dismiss-error"]');
   assert.equal(ui.doc.querySelector('[role="alert"]').hidden, true);
 });
+
+test("the selected advisor transcript can minimize while copy and export stay available", () => {
+  const ui = setup();
+  const advisor = worker({ id: "advisor", name: "Reviewer", kind: "advisor", canSteer: false, canCancel: false });
+  ui.snapshot({ agents: [advisor], selectedId: advisor.id, transcript: {
+    agentId: advisor.id, readOnly: true, messages: [{ role: "assistant", content: "Review complete" }],
+  } });
+  const toggle = ui.doc.querySelector('[data-action="toggle-transcript"]');
+  assert.ok(toggle, "The selected transcript needs its own collapse button");
+  assert.equal(toggle.tagName, "BUTTON");
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.match(toggle.getAttribute("aria-label"), /Reviewer/);
+  const transcript = ui.doc.getElementById(toggle.getAttribute("aria-controls"));
+  assert.equal(transcript, ui.doc.querySelector('[data-role="transcript"]'));
+  ui.click('[data-action="copy-transcript"]');
+  assert.equal(transcript.hidden, false, "Copy must not toggle the transcript");
+  toggle.click();
+  assert.equal(transcript.hidden, true);
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(toggle.textContent, "Expand");
+  assert.equal(ui.doc.querySelector('[data-action="copy-transcript"]').closest("[hidden]"), null);
+  assert.equal(ui.doc.querySelector('[data-action="export"]').closest("[hidden]"), null);
+  ui.click('[data-action="copy-transcript"]');
+  ui.click('[data-action="export"]');
+  assert.equal(transcript.hidden, true, "Copy and Export must leave the collapsed state unchanged");
+  assert.equal(ui.sent.at(-1).type, "exportAgentTranscript");
+  toggle.click();
+  assert.equal(transcript.hidden, false);
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+});
+
+test("transcript collapse choices survive refresh and belong to their own agent and tab", () => {
+  const ui = setup();
+  const first = worker({ id: "advisor", name: "Reviewer", kind: "advisor", canSteer: false, canCancel: false });
+  const second = worker({ id: "worker-2", name: "Second worker" });
+  const transcript = (id, text) => ({ agentId: id, readOnly: id === first.id, messages: [{ role: "assistant", content: text }] });
+  ui.snapshot({ agents: [first, second], selectedId: first.id, transcript: transcript(first.id, "First review") });
+  ui.click('[data-action="toggle-transcript"]');
+  ui.snapshot({ agents: [first, second], selectedId: first.id, transcript: transcript(first.id, "Updated review") });
+  assert.equal(ui.doc.querySelector('[data-role="transcript"]').hidden, true);
+  ui.click('[data-agent-id="worker-2"]');
+  ui.snapshot({ agents: [first, second], selectedId: second.id, transcript: transcript(second.id, "Worker transcript") });
+  assert.equal(ui.doc.querySelector('[data-role="transcript"]').hidden, false, "A new selection starts expanded");
+  ui.click('[data-agent-id="advisor"]');
+  ui.snapshot({ agents: [first, second], selectedId: first.id, transcript: transcript(first.id, "Updated review") });
+  assert.equal(ui.doc.querySelector('[data-role="transcript"]').hidden, true, "Returning to an agent restores its choice");
+  ui.bridge.currentTabId = "tab-b";
+  ui.snapshot({ agents: [first], selectedId: first.id, transcript: transcript(first.id, "Other chat review") });
+  assert.equal(ui.doc.querySelector('[data-role="transcript"]').hidden, false, "Repeated IDs in another tab start expanded");
+  ui.bridge.currentTabId = "tab-a";
+  ui.snapshot({ agents: [first, second], selectedId: first.id, transcript: transcript(first.id, "Updated review") });
+  assert.equal(ui.doc.querySelector('[data-role="transcript"]').hidden, true, "Returning to the original tab restores collapse");
+});
+
+test("collapsed transcript updates preserve scroll, open raw blocks, and steering drafts", () => {
+  const ui = setup();
+  const initial = { agentId: "worker-1", readOnly: false, messages: [{ id: "m1", role: "assistant", content: "Working" }] };
+  ui.snapshot({ agents: [worker()], selectedId: "worker-1", transcript: initial });
+  const input = ui.doc.querySelector('[data-role="steering-input"]');
+  input.value = "Unsent direction";
+  input.dispatchEvent(new ui.dom.window.Event("input", { bubbles: true }));
+  input.focus();
+  input.setSelectionRange(3, 7);
+  const transcriptEl = ui.doc.querySelector('[data-role="transcript"]');
+  // A hidden browser viewport can report zero scroll offsets and ignore writes.
+  let visibleScrollTop = 48;
+  Object.defineProperty(transcriptEl, "scrollTop", {
+    get: () => transcriptEl.hidden ? 0 : visibleScrollTop,
+    set: value => { if (!transcriptEl.hidden) visibleScrollTop = value; },
+  });
+  Object.defineProperty(transcriptEl, "scrollHeight", { get: () => transcriptEl.hidden ? 0 : 200 });
+  Object.defineProperty(transcriptEl, "clientHeight", { get: () => transcriptEl.hidden ? 0 : 100 });
+  ui.doc.querySelector('[data-raw-message]').open = true;
+  ui.click('[data-action="toggle-transcript"]');
+  ui.snapshot({ agents: [worker()], transcript: { ...initial, messages: [
+    { id: "m1", role: "assistant", content: "Still working" },
+    { id: "m2", role: "assistant", content: "Another update" },
+  ] } });
+  assert.equal(ui.doc.querySelector('[data-role="steering-input"]'), input);
+  assert.equal(input.value, "Unsent direction");
+  assert.equal(input.selectionStart, 3);
+  assert.equal(ui.doc.querySelector('[data-action="cancel"]').closest("[hidden]"), null);
+  ui.click('[data-action="toggle-transcript"]');
+  assert.equal(transcriptEl.scrollTop, 48);
+  assert.equal(ui.doc.querySelector('[data-raw-message="0"]').open, true);
+  assert.match(transcriptEl.textContent, /Another update/);
+});

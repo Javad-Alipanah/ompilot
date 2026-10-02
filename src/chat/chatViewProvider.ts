@@ -546,7 +546,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 <body>
   <div id="app">
     <div id="dropOverlay" class="drop-overlay" hidden>
-      <div class="drop-card">Drop to attach</div>
+      <div class="drop-card">
+        <span>Drop to attach</span>
+        <button id="dismissDropBtn" type="button" class="secondary" aria-label="Dismiss attachment drop overlay" title="Dismiss (Esc)">Dismiss</button>
+      </div>
     </div>
 
     <div class="tabstrip" id="tabstrip" aria-label="Chat tabs">
