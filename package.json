@@ -305,7 +305,7 @@
     ]
   },
   "scripts": {
-    "test": "bun test tests/*.test.ts && node --test tests/ui-*.test.cjs",
+    "test": "bun scripts/test-backend.mjs && node --test tests/ui-*.test.cjs",
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "compile": "tsc -p tsconfig.json --noEmit",

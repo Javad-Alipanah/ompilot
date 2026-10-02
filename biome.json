@@ -11,6 +11,7 @@
       "src/**",
       "media/**",
       "esbuild.mjs",
+      "scripts/test-backend.mjs",
       "package.json",
       "tsconfig.json",
       "biome.json",
