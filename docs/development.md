@@ -15,7 +15,8 @@ If you want to enable it, run the following from this checkout in WSL. The authe
 ```bash
 gh auth refresh --hostname github.com --scopes workflow
 mkdir -p .github/workflows
-git mv docs/ci-workflow.yml .github/workflows/ci.yml
+cp docs/ci-workflow.yml .github/workflows/ci.yml
+git add .github/workflows/ci.yml
 git commit -m "Enable OMPilot verification workflow"
 git push origin main
 ```
