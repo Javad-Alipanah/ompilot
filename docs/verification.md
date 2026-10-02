@@ -1,11 +1,11 @@
-# Verification for 0.1.1
+# Verification for 0.1.2
 
 Checked on 2026-10-02 in Ubuntu WSL with OMP 18.4.10, Bun 1.3.14 and Node 24. The Windows editor is Cursor 3.22.12.
 
 ## Automated checks
 
 - TypeScript compilation: passed.
-- 92 backend/host tests and 38 webview DOM tests: passed (130 total).
+- 92 backend/host tests and 43 webview DOM tests: passed (135 total).
 - Biome error-level check and Git whitespace check: passed.
 - Frozen dependency installation and production VSIX packaging: passed locally.
 
@@ -13,9 +13,11 @@ GitHub Actions is enabled for pushes and pull requests. The workflow performs fr
 
 The suite covers RPC framing and process disposal, asynchronous settling and queued prompts, streamed/restored thinking, complete tool outputs, worker/advisor transcript restoration, nested owned-path validation, profile resolution and remembered overrides, custom session directories, editor buffers, questions, stale events and per-tab UI drafts.
 
+Inline slash completion is covered after prose, on later contenteditable lines, with earlier slash tokens, while editing within a token, and with image attachments. Surrounding prompt text stays intact. Slashes within URLs, relative paths and fractions do not trigger the popup. OMP retains responsibility for command invocation syntax.
+
 ## Real OMP checks
 
-Disposable workspaces and harness-owned sessions exercised the actual installed runtime. Existing user conversations and configuration were not modified.
+The baseline checks through 0.1.1 used disposable workspaces and harness-owned sessions to exercise the actual installed runtime. Existing user conversations and configuration were not modified. The 0.1.2 change affects only composer completion and adds DOM regressions; it does not change the OMP transport.
 
 | Check | Observed result |
 | --- | --- |

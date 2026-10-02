@@ -2579,12 +2579,14 @@
     const cursor = getComposerCaretOffset();
     const before = value.slice(0, cursor);
 
-    // Slash commands: only at start of input (optional leading whitespace)
-    const slash = before.match(/^\s*\/([^\s]*)$/);
+    // Slash tokens can follow prose, spaces or line breaks, like @mentions.
+    const slash = before.match(/(^|\s)\/([^\s]*)$/);
     if (slash) {
-      const token = slash[0].replace(/^\s*/, "");
-      const start = before.length - token.length;
-      return { kind: "command", query: slash[1] || "", start: start, end: cursor };
+      const query = slash[2] || "";
+      const start = before.length - query.length - 1;
+      // Editing inside a token replaces its remaining name too, leaving prose intact.
+      const tail = value.slice(cursor).match(/^\S*/)[0];
+      return { kind: "command", query: query, start: start, end: cursor + tail.length };
     }
 
     // @file mentions: token beginning with @ after start/whitespace

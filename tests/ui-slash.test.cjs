@@ -111,11 +111,69 @@ test("catalog failure stays visible without disabling ordinary command submissio
   assert.equal(ui.sent.at(-1).text, "/skill:known");
 });
 
-test("slash inside ordinary prompt text does not trigger command discovery", () => {
+test("typing slash after prose discovers commands without changing the draft", () => {
   const ui = setup();
-  ui.type("Read docs /commands");
-  assert.equal(ui.request(), undefined);
-  assert.equal(ui.doc.querySelector("#suggest").hidden, true);
+  ui.type("Please investigate using /");
+  assert.equal(ui.request()?.tabId, "tab-a");
+  ui.catalog([skill]);
+  assert.equal(ui.doc.querySelector("#suggest").hidden, false);
+  assert.match(ui.doc.querySelector("#suggestList").textContent, /graphify-windows/);
+  assert.equal(ui.input.textContent, "Please investigate using /");
+});
+
+test("inline skill completion preserves prose before the token and arguments after the caret", () => {
+  const ui = setup();
+  const prefix = "Please investigate using ";
+  ui.type(prefix + "/graphify the architecture", prefix.length + 9);
+  ui.catalog([skill]);
+  const before = ui.sent.length;
+  ui.key("Tab");
+  assert.equal(ui.input.textContent, prefix + "/skill:agents/graphify-windows the architecture");
+  assert.equal(ui.sent.length, before, "Completion must not run or send an inline skill");
+  ui.key("Enter");
+  assert.equal(ui.sent.at(-1).text, prefix + "/skill:agents/graphify-windows the architecture");
+});
+
+test("inline completion uses the token at the caret when a prompt has earlier slash tokens", () => {
+  const ui = setup();
+  const prefix = "Compare /skill:earlier with ";
+  ui.type(prefix + "/graphify");
+  ui.catalog([skill]);
+  ui.doc.querySelector("#suggestList .suggest-item").click();
+  assert.equal(ui.input.textContent, prefix + "/skill:agents/graphify-windows ");
+});
+
+test("inline completion replaces the whole slash token when editing within its name", () => {
+  const ui = setup();
+  const prefix = "Please use ";
+  ui.type(prefix + "/graphify for this task", prefix.length + 4);
+  ui.catalog([skill]);
+  ui.key("Tab");
+  assert.equal(ui.input.textContent, prefix + "/skill:agents/graphify-windows for this task");
+});
+
+test("slash completion on a later contenteditable line preserves the full multiline prompt", () => {
+  const ui = setup();
+  ui.input.innerHTML = "<div>Investigate the project.</div><div>Use /graphify for this task</div>";
+  const range = ui.doc.createRange();
+  range.setStart(ui.input.lastChild.firstChild, 13);
+  range.collapse(true);
+  ui.dom.window.getSelection().removeAllRanges();
+  ui.dom.window.getSelection().addRange(range);
+  ui.input.dispatchEvent(new ui.dom.window.Event("input", { bubbles: true }));
+  ui.catalog([skill]);
+  ui.key("Tab");
+  ui.key("Enter");
+  assert.equal(ui.sent.at(-1).text, "Investigate the project.\nUse /skill:agents/graphify-windows for this task");
+});
+
+test("slashes within URLs, paths and fractions do not open command completion", () => {
+  const ui = setup();
+  for (const text of ["Read https://example.com/commands", "Check src/commands", "Use C:/tools/commands", "Read ./commands", "Read ../commands", "Compute 3/4"]) {
+    ui.type(text);
+    assert.equal(ui.request(), undefined, text);
+    assert.equal(ui.doc.querySelector("#suggest").hidden, true, text);
+  }
 });
 
 test("late command discovery cannot reopen a popup after the queue menu takes focus", () => {
@@ -154,16 +212,18 @@ test("Escape dismisses an empty or failed discovery popup", () => {
 
 test("skill completion keeps uploaded image chips and their attachment state", () => {
   const ui = setup();
-  ui.type("/graphify");
+  const text = "Inspect this image using /graphify";
+  ui.type(text);
   ui.receive({ type: "inlineImage", attachment: { id: "image-a", kind: "image", label: "Example", previewDataUrl: "data:image/png;base64,AA==" } });
   const range = ui.doc.createRange();
-  range.setStart(ui.input.firstChild, 9);
+  range.setStart(ui.input.firstChild, text.length);
   range.collapse(true);
   ui.dom.window.getSelection().removeAllRanges();
   ui.dom.window.getSelection().addRange(range);
   ui.input.dispatchEvent(new ui.dom.window.Event("input", { bubbles: true }));
   ui.catalog([skill]);
   ui.key("Tab");
+  assert.match(ui.input.textContent, /^Inspect this image using \/skill:agents\/graphify-windows /);
   assert.ok(ui.input.querySelector('.image-chip[data-attachment-id="image-a"]'));
   ui.input.dispatchEvent(new ui.dom.window.Event("input", { bubbles: true }));
   assert.equal(ui.sent.some(message => message.type === "removeAttachment" && message.id === "image-a"), false);

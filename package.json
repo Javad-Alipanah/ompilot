@@ -6,7 +6,7 @@
     "type": "git",
     "url": "https://github.com/javad-alipanah/ompilot"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "icon": "media/ompilot-icon.png",
   "publisher": "javad-alipanah",
   "extensionKind": [
