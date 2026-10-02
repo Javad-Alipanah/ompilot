@@ -1,11 +1,11 @@
-# Verification for 0.1.3
+# Verification for 0.1.4
 
 Checked on 2026-10-02 in Ubuntu WSL with OMP 18.4.10, Bun 1.3.14 and Node 24. The Windows editor is Cursor 3.22.12.
 
 ## Automated checks
 
 - TypeScript compilation: passed.
-- 92 backend/host tests and 55 webview DOM tests: passed (147 total).
+- 97 backend/host tests and 55 webview DOM tests: passed (152 total).
 - Biome error-level check and Git whitespace check: passed.
 - Frozen dependency installation and production VSIX packaging: passed locally.
 
@@ -17,9 +17,11 @@ Inline slash completion is covered after prose, on later contenteditable lines, 
 
 Drop-overlay regressions cover repeated dragover events, internal element transitions, non-file drags, Escape and button dismissal, cancelled/missing drag events, and real file attachment. Dismissal preserves the draft and sends no agent stop/restart request. Selected transcript tests cover minimizing advisors and workers, update and tab/agent persistence, accessible controls, copy/export, steering drafts, raw block state, and hidden-viewport scroll restoration.
 
+Question lifecycle tests exercise the actual registered RPC client listeners: process exit clears queued cards and timeout timers without sending a response to the dead process, including stopped/stale-resume exits. An old client's exit cannot clear the replacement client's questions. Recoverable client errors preserve live dialogs and permit answers. [Question handling](questions.md) describes operator controls and worker/advisor boundaries.
+
 ## Real OMP checks
 
-The baseline checks through 0.1.1 used disposable workspaces and harness-owned sessions to exercise the actual installed runtime. Existing user conversations and configuration were not modified. Changes in 0.1.2 and 0.1.3 affect the webview and add DOM regressions; they do not change the OMP transport. No live OMP sessions were restarted for these UI fixes.
+The baseline checks through 0.1.1 used disposable workspaces and harness-owned sessions to exercise the actual installed runtime. Existing user conversations and configuration were not modified. Changes in 0.1.2 and 0.1.3 affect the webview; 0.1.4 clears stale UI requests when the connected process exits. No live OMP sessions were restarted for these fixes.
 
 | Check | Observed result |
 | --- | --- |

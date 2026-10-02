@@ -440,6 +440,7 @@ export class SessionManager {
 
     client.on("exit", (code) => {
       if (this.client !== client) return;
+      this.clearUiQuestions({ cancelRemote: false });
       if (this.status.state !== "stopped") {
         // A stale --resume target exits before ready; start() recovers with a
         // fresh session below. Keep this out of the error log and don't flash
