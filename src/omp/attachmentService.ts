@@ -1,23 +1,59 @@
+import { randomUUID } from "crypto";
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import { randomUUID } from "crypto";
 import * as vscode from "vscode";
+import { type CapturedTerminalCommand, terminalCapture } from "./terminalCapture";
 import type { Attachment, AttachmentKind } from "./types";
-import {
-  type CapturedTerminalCommand,
-  terminalCapture,
-} from "./terminalCapture";
+
 type AttachmentHost = {
   addAttachment(attachment: Omit<import("./types").Attachment, "id"> & { id?: string }): Attachment;
 };
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]);
 const TEXT_EXTS = new Set([
-  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".md", ".txt", ".css", ".scss",
-  ".html", ".htm", ".yml", ".yaml", ".toml", ".py", ".rs", ".go", ".java", ".kt", ".swift",
-  ".c", ".h", ".cpp", ".hpp", ".cs", ".sh", ".zsh", ".bash", ".sql", ".graphql", ".env",
-  ".xml", ".svg", ".vue", ".svelte", ".rb", ".php", ".lua", ".r", ".dart",
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".md",
+  ".txt",
+  ".css",
+  ".scss",
+  ".html",
+  ".htm",
+  ".yml",
+  ".yaml",
+  ".toml",
+  ".py",
+  ".rs",
+  ".go",
+  ".java",
+  ".kt",
+  ".swift",
+  ".c",
+  ".h",
+  ".cpp",
+  ".hpp",
+  ".cs",
+  ".sh",
+  ".zsh",
+  ".bash",
+  ".sql",
+  ".graphql",
+  ".env",
+  ".xml",
+  ".svg",
+  ".vue",
+  ".svelte",
+  ".rb",
+  ".php",
+  ".lua",
+  ".r",
+  ".dart",
 ]);
 
 function displayPath(fsPath: string): string {
@@ -55,7 +91,10 @@ function mimeFromExt(fsPath: string): string | undefined {
   }
 }
 
-async function maybePreviewDataUrl(fsPath: string, kind: AttachmentKind): Promise<string | undefined> {
+async function maybePreviewDataUrl(
+  fsPath: string,
+  kind: AttachmentKind,
+): Promise<string | undefined> {
   if (kind !== "image") {
     return undefined;
   }
@@ -129,6 +168,18 @@ export class AttachmentService {
   }
 
   async attachFsPath(fsPath: string): Promise<Attachment> {
+    const openDocument = vscode.workspace.textDocuments.find(
+      (doc) => doc.uri.fsPath === fsPath && doc.isDirty,
+    );
+    if (openDocument) {
+      return this.sessions.addAttachment({
+        kind: "text",
+        label: `${displayPath(fsPath)} (unsaved)`,
+        path: displayPath(fsPath),
+        language: openDocument.languageId,
+        content: openDocument.getText(),
+      });
+    }
     const stat = await fs.stat(fsPath);
     const kind = kindForPath(fsPath, stat.isDirectory());
     const label = displayPath(fsPath);
@@ -161,9 +212,7 @@ export class AttachmentService {
     const dir = path.join(this.storageUri.fsPath, "pasted-images");
     await fs.mkdir(dir, { recursive: true });
 
-    const safeBase = (input.name || "paste")
-      .replace(/[^\w.\-]+/g, "_")
-      .slice(0, 80);
+    const safeBase = (input.name || "paste").replace(/[^\w.-]+/g, "_").slice(0, 80);
     const ext =
       path.extname(safeBase) ||
       (input.mimeType === "image/jpeg"

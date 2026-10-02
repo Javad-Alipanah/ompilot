@@ -1,6 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "child_process";
 import { EventEmitter } from "events";
 import * as readline from "readline";
+import { RpcFrameDecoder } from "./rpcFrames";
 import type { AssistantMessageEvent, OmpClientOptions, OmpRpcEvent } from "./types";
 
 export interface OmpRpcClientEvents {
@@ -21,10 +22,12 @@ interface PendingRequest {
 
 export class OmpRpcClient extends EventEmitter {
   private proc: ChildProcessWithoutNullStreams | undefined;
-  private started = false;
+  private starting?: Promise<void>;
+  private stopping?: Promise<void>;
   private ready = false;
   private nextRequestId = 1;
-  private readonly pending = new Map<number, PendingRequest>();
+  private readonly pending = new Map<string, PendingRequest>();
+  private readonly decoder = new RpcFrameDecoder();
 
   constructor(private readonly options: OmpClientOptions) {
     super();
@@ -35,16 +38,30 @@ export class OmpRpcClient extends EventEmitter {
   }
 
   get isRunning(): boolean {
-    return Boolean(this.proc && !this.proc.killed);
+    return Boolean(this.proc && !this.proc.killed && this.proc.exitCode === null && !this.stopping);
   }
 
   async start(): Promise<void> {
-    if (this.started) {
-      return;
+    if (this.stopping) await this.stopping;
+    if (this.ready) return;
+    if (this.starting) return this.starting;
+    this.starting = this.startProcess();
+    try {
+      await this.starting;
+    } catch (error) {
+      await this.dispose();
+      throw error;
+    } finally {
+      this.starting = undefined;
     }
-    this.started = true;
+  }
 
-    const args = ["--mode", "rpc", "--cwd", this.options.cwd];
+  private async startProcess(): Promise<void> {
+    this.decoder.reset();
+    const rpcMode = (this.options as OmpClientOptions & { rpcMode?: string }).rpcMode || "rpc-ui";
+
+    const args = ["--mode", rpcMode, "--cwd", this.options.cwd];
+    if (this.options.profile) args.push("--profile", this.options.profile);
     if (this.options.model) {
       args.push("--model", this.options.model);
     }
@@ -83,37 +100,76 @@ export class OmpRpcClient extends EventEmitter {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    this.proc.on("error", (err) => {
-      this.emit("error", err);
-    });
-
-    this.proc.on("exit", (code) => {
+    const proc = this.proc;
+    const onError = (err: Error) => {
       this.ready = false;
-      for (const [id, pending] of this.pending) {
-        clearTimeout(pending.timer);
-        pending.reject(new Error(`omp exited (code ${code ?? "null"})`));
-        this.pending.delete(id);
-      }
+      this.rejectPending(err);
+      // EventEmitter's special `error` event must never crash a host that has
+      // only subscribed to stderr / exit. Startup still rejects independently.
+      if (this.listenerCount("error")) this.emit("error", err);
+      else this.emit("stderr", err.message);
+    };
+    proc.on("error", onError);
+    proc.stdin.on("error", onError);
+
+    proc.on("exit", (code) => {
+      if (this.proc !== proc) return;
+      this.proc = undefined;
+      this.ready = false;
+      this.rejectPending(new Error(`omp exited (code ${code ?? "null"})`));
+      this.decoder.reset();
       this.emit("exit", code);
     });
 
-    const rl = readline.createInterface({ input: this.proc.stdout });
+    const readyPromise = this.waitForReady(20_000);
+    // waitForReady has installed its error listener before a spawn failure can fire.
+    const rl = readline.createInterface({ input: proc.stdout });
     rl.on("line", (line) => {
+      if (this.proc !== proc || this.stopping) return;
       const trimmed = line.trim();
       if (!trimmed) {
         return;
       }
       let event: OmpRpcEvent;
       try {
-        event = JSON.parse(trimmed) as OmpRpcEvent;
-      } catch {
-        this.emit("stderr", `Non-JSON stdout: ${trimmed.slice(0, 200)}`);
+        if (Buffer.byteLength(line, "utf8") + 1 > 1024 * 1024) {
+          throw new Error("OMP RPC physical frame exceeded the transport limit");
+        }
+        const decoded = this.decoder.push(JSON.parse(trimmed));
+        if (!decoded) return;
+        event = decoded;
+      } catch (error) {
+        this.decoder.reset();
+        const err = new Error(
+          `Invalid OMP RPC frame: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        this.rejectPending(err);
+        this.emit("stderr", err.message);
         return;
       }
 
       if (event.type === "ready") {
-        this.ready = true;
-        this.emit("ready");
+        const versions = event.supportedProtocolVersions;
+        const negotiation =
+          Array.isArray(versions) && versions.includes(2)
+            ? this.request({ type: "negotiate_protocol", protocolVersion: 2 })
+            : Promise.resolve(undefined);
+        void negotiation
+          .then(async (response) => {
+            if (this.proc !== proc || this.stopping) return;
+            if (response?.success === false)
+              throw new Error(String(response.error ?? "Protocol negotiation failed"));
+            // RPC UI exposes structured multi-question dialogs only when the host
+            // opts in. Legacy runtimes can retain their ordinary select/input UI.
+            const ask = await this.request({ type: "set_ask_dialog", enabled: true });
+            if (ask.success === false && !/unknown|unsupported/i.test(String(ask.error))) {
+              throw new Error(String(ask.error ?? "Could not enable OMP questions"));
+            }
+            if (this.proc !== proc || this.stopping) return;
+            this.ready = true;
+            this.emit("ready");
+          })
+          .catch(onError);
       }
 
       if (event.type === "response") {
@@ -131,6 +187,14 @@ export class OmpRpcClient extends EventEmitter {
 
       this.emit("event", event);
     });
+    rl.on("close", () => {
+      if (this.proc !== proc) return;
+      try {
+        this.decoder.finish();
+      } catch (error) {
+        this.rejectPending(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
 
     this.proc.stderr.setEncoding("utf8");
     this.proc.stderr.on("data", (chunk: string) => {
@@ -140,7 +204,15 @@ export class OmpRpcClient extends EventEmitter {
       }
     });
 
-    await this.waitForReady(20_000);
+    await readyPromise;
+  }
+
+  private rejectPending(error: Error): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
   }
 
   private waitForReady(timeoutMs: number): Promise<void> {
@@ -179,10 +251,13 @@ export class OmpRpcClient extends EventEmitter {
   }
 
   send(command: Record<string, unknown>): void {
-    if (!this.proc?.stdin.writable) {
+    if (!this.proc?.stdin.writable || this.stopping) {
       throw new Error("omp RPC process is not running");
     }
-    this.proc.stdin.write(`${JSON.stringify(command)}\n`);
+    const json = JSON.stringify(command);
+    if (Buffer.byteLength(json, "utf8") + 1 > 1024 * 1024)
+      throw new Error("OMP RPC command exceeded the transport limit");
+    this.proc.stdin.write(`${json}\n`);
   }
 
   /**
@@ -192,7 +267,7 @@ export class OmpRpcClient extends EventEmitter {
    */
   private resolveResponse(event: OmpRpcEvent): void {
     if (event.id != null) {
-      const id = Number(event.id);
+      const id = String(event.id);
       const pending = this.pending.get(id);
       if (pending) {
         clearTimeout(pending.timer);
@@ -200,10 +275,12 @@ export class OmpRpcClient extends EventEmitter {
         pending.resolve(event);
         return;
       }
+      // A stale or unknown ID must never complete another request.
+      return;
     }
 
     const command = typeof event.command === "string" ? event.command : undefined;
-    if (!command) {
+    if (!command || event.success !== false) {
       return;
     }
     for (const [id, pending] of this.pending) {
@@ -221,7 +298,7 @@ export class OmpRpcClient extends EventEmitter {
     if (!this.proc?.stdin.writable) {
       return Promise.reject(new Error("omp RPC process is not running"));
     }
-    const id = this.nextRequestId++;
+    const id = String(this.nextRequestId++);
     const commandName = String(command.type ?? "unknown");
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -260,7 +337,11 @@ export class OmpRpcClient extends EventEmitter {
       let messages = Array.isArray(data.messages) ? data.messages : [];
       all.push(...messages);
       let cursor = data.nextCursor;
+      const seenCursors = new Set<string>();
       while (typeof cursor === "string" && cursor) {
+        if (seenCursors.has(cursor))
+          throw new Error("OMP returned a repeated messages page cursor");
+        seenCursors.add(cursor);
         const next = await this.request({ type: "get_messages_page", cursor, limit: 64 }, 30_000);
         if (next.success === false) {
           throw new Error(String(next.error ?? "get_messages_page failed"));
@@ -293,7 +374,11 @@ export class OmpRpcClient extends EventEmitter {
   /** Answer an omp `extension_ui_request` (confirm / select / input / editor). */
   respondExtensionUi(
     id: string,
-    response: { confirmed: boolean } | { value: string } | { cancelled: true; timedOut?: boolean },
+    response:
+      | { confirmed: boolean }
+      | { value: string }
+      | { cancelled: true; timedOut?: boolean }
+      | { answers: Array<{ id: string; selectedOptions: string[]; customInput?: string }> },
   ): void {
     this.send({ type: "extension_ui_response", id, ...response });
   }
@@ -307,29 +392,38 @@ export class OmpRpcClient extends EventEmitter {
   }
 
   async dispose(): Promise<void> {
-    if (!this.proc) {
-      return;
-    }
-    try {
-      this.send({ type: "shutdown" });
-    } catch {
-      // ignore
-    }
+    if (this.stopping) return this.stopping;
     const proc = this.proc;
-    this.proc = undefined;
     this.ready = false;
-
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        if (!proc.killed) {
-          proc.kill("SIGTERM");
-        }
-        resolve();
-      }, 800);
-      proc.once("exit", () => {
+    this.rejectPending(new Error("OMP RPC client disposed"));
+    if (!proc) return;
+    this.stopping = new Promise<void>((resolve) => {
+      let forceTimer: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
         clearTimeout(timer);
+        if (forceTimer) clearTimeout(forceTimer);
+        proc.off("exit", finish);
         resolve();
-      });
+      };
+      const timer = setTimeout(() => {
+        proc.kill("SIGTERM");
+        forceTimer = setTimeout(() => {
+          proc.kill("SIGKILL");
+          finish();
+        }, 800);
+      }, 800);
+      proc.once("exit", finish);
+      // OMP's input EOF drains RPC work and performs session shutdown.
+      // There is no `shutdown` RPC command.
+      if (proc.exitCode !== null || proc.signalCode !== null || !proc.pid) finish();
+      else proc.stdin.end();
     });
+    try {
+      await this.stopping;
+    } finally {
+      if (this.proc === proc) this.proc = undefined;
+      this.decoder.reset();
+      this.stopping = undefined;
+    }
   }
 }

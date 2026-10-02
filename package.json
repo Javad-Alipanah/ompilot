@@ -1,13 +1,21 @@
 {
-  "name": "oh-my-pi-chat",
-  "displayName": "OMP Chat",
-  "description": "Copilot/Cursor-style chat sidebar for OMP (omp) in VS Code",
+  "name": "ompilot",
+  "displayName": "OMPilot",
+  "description": "Oh My Pi inside Cursor: chat, live workers, advisor transcripts, prewalk and persistent sessions",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Chakyiu/omp-vscode"
+    "url": "https://github.com/javad-alipanah/ompilot"
   },
-  "version": "0.7.9",
-  "publisher": "ChakyiuLI",
+  "version": "0.1.0",
+  "publisher": "javad-alipanah",
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
   "license": "MIT",
   "engines": {
     "vscode": "^1.90.0"
@@ -27,6 +35,10 @@
   "activationEvents": [
     "onView:ompChat.sidebar",
     "onCommand:ompChat.open",
+    "onCommand:ompChat.diagnostics",
+    "onCommand:ompChat.pickProfile",
+    "onCommand:ompChat.openConfig",
+    "onCommand:ompChat.applyConfig",
     "onCommand:ompChat.newChat",
     "onCommand:ompChat.sendSelection",
     "onCommand:ompChat.attachFiles",
@@ -41,7 +53,7 @@
       "activitybar": [
         {
           "id": "ompChat",
-          "title": "OMP",
+          "title": "OMPilot",
           "icon": "media/icon.svg"
         }
       ]
@@ -51,7 +63,7 @@
         {
           "type": "webview",
           "id": "ompChat.sidebar",
-          "name": "Chat"
+          "name": "OMPilot"
         }
       ]
     },
@@ -60,6 +72,22 @@
         "command": "ompChat.open",
         "title": "OMP: Open Chat",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "ompChat.diagnostics",
+        "title": "OMP: Connection Diagnostics"
+      },
+      {
+        "command": "ompChat.pickProfile",
+        "title": "OMP: Select Profile"
+      },
+      {
+        "command": "ompChat.openConfig",
+        "title": "OMP: Open OMP Config"
+      },
+      {
+        "command": "ompChat.applyConfig",
+        "title": "OMP: Apply Config to Sessions"
       },
       {
         "command": "ompChat.newChat",
@@ -167,8 +195,13 @@
       ]
     },
     "configuration": {
-      "title": "OMP Chat",
+      "title": "OMPilot",
       "properties": {
+        "ompChat.profile": {
+          "type": "string",
+          "default": "",
+          "description": "Named OMP profile for this workspace. Blank inherits launch arguments/environment; default explicitly uses the base profile. Use OMP: Apply Config to Sessions after changing this setting."
+        },
         "ompChat.ompPath": {
           "type": "string",
           "default": "omp",
@@ -227,7 +260,7 @@
             "type": "string"
           },
           "default": [],
-          "description": "Extra CLI args appended when spawning omp --mode rpc."
+          "description": "Extra CLI args appended when spawning omp --mode rpc-ui."
         },
         "ompChat.mode": {
           "type": "string",
@@ -237,7 +270,7 @@
             "Plan"
           ],
           "default": "Agent",
-          "description": "Chat mode shown in the Cursor-style composer."
+          "description": "Agent uses normal OMP behavior; Ask and Plan add read-oriented prompt instructions. These modes do not enforce tool restrictions."
         },
         "ompChat.displayName": {
           "type": "string",
@@ -271,11 +304,11 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run build",
+    "test": "bun test tests/*.test.ts && node --test tests/ui-*.test.cjs",
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "compile": "tsc -p tsconfig.json --noEmit",
-    "package": "vsce package --no-dependencies --allow-missing-repository",
+    "package": "bun run build && vsce package --no-dependencies --githubBranch main",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
@@ -287,6 +320,7 @@
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.3.2",
     "esbuild": "^0.25.1",
+    "jsdom": "^30.1.1",
     "typescript": "^5.8.2"
   }
 }

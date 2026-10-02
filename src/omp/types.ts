@@ -1,3 +1,5 @@
+import type { InspectionSnapshot } from "./inspectionTypes";
+
 export type ChatRole = "user" | "assistant" | "system";
 
 export type ToolStatus = "running" | "done" | "error";
@@ -106,10 +108,27 @@ export interface FileSuggestItem {
   /** Optional short label override (e.g. "Current file") */
   label?: string;
   detail?: string;
+  /** Capture the current editor contents instead of adding an on-disk mention. */
+  attach?: boolean;
 }
 
 /** Interactive question from omp `extension_ui_request` (select/confirm/input/editor). */
-export type UiQuestionMethod = "select" | "confirm" | "input" | "editor";
+export type UiQuestionMethod = "select" | "confirm" | "input" | "editor" | "ask";
+
+export interface AskQuestion {
+  id: string;
+  question: string;
+  header?: string;
+  options: Array<{ label: string; description?: string; preview?: string }>;
+  multi?: boolean;
+  recommended?: number;
+}
+
+export interface AskAnswer {
+  id: string;
+  selectedOptions: string[];
+  customInput?: string;
+}
 
 export interface UiQuestion {
   id: string;
@@ -121,9 +140,12 @@ export interface UiQuestion {
   prefill?: string;
   timeoutMs?: number;
   createdAt: number;
+  questions?: AskQuestion[];
 }
 
 export type HostToWebview =
+  | { type: "steeringAccepted"; tabId: string; message: string }
+  | { type: "inspection"; snapshot: InspectionSnapshot & { tabId: string } }
   | {
       type: "ready";
       status: SessionStatus;
@@ -131,6 +153,7 @@ export type HostToWebview =
       attachments: Attachment[];
       showThinking: boolean;
       model?: string;
+      profile?: string;
       mode?: string;
       displayName?: string;
       contextUsage?: ContextUsage | null;
@@ -161,6 +184,18 @@ export type HostToWebview =
   | { type: "inlineImage"; clientId?: string; attachment: Attachment };
 
 export type WebviewToHost =
+  | { type: "pickProfile" }
+  | { type: "openOmpConfig" }
+  | { type: "applyOmpConfig" }
+  | { type: "inspectAgents"; tabId: string }
+  | { type: "inspectAgent"; id: string; tabId: string }
+  | { type: "steerAgent"; id: string; message: string; tabId: string }
+  | { type: "cancelAgent"; id: string; tabId: string }
+  | { type: "exportAgentTranscript"; id: string; tabId: string }
+  | { type: "advisorAction"; action: "on" | "off" | "status"; tabId: string }
+  | { type: "prewalkAction"; tabId: string }
+  | { type: "reviewChanges"; tabId: string }
+  | { type: "steerMain"; tabId: string; message: string }
   | { type: "ready" }
   | { type: "send"; text: string }
   | { type: "stop" }
@@ -207,6 +242,7 @@ export type WebviewToHost =
       confirmed?: boolean;
       value?: string;
       cancelled?: boolean;
+      answers?: AskAnswer[];
     };
 
 export interface OmpRpcEvent {
@@ -228,6 +264,7 @@ export interface AssistantMessageEvent {
 export interface OmpClientOptions {
   ompPath: string;
   cwd: string;
+  profile?: string;
   model?: string;
   thinking?: string;
   approvalMode?: string;

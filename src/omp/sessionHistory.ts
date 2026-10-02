@@ -126,16 +126,15 @@ function compactToolInput(value: unknown): unknown {
   return slim;
 }
 
-function preview(value: unknown, max = 400): string | undefined {
+function preview(value: unknown, _max = 400): string | undefined {
   if (value == null) {
     return undefined;
   }
-  const compact = compactToolInput(value);
-  const text = typeof compact === "string" ? compact : JSON.stringify(compact, null, 2);
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   if (!text) {
     return undefined;
   }
-  return text.length > max ? `${text.slice(0, max)}…` : text;
+  return text;
 }
 
 function textFromContent(content: unknown): string | undefined {

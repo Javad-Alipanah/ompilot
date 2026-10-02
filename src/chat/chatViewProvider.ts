@@ -1,7 +1,9 @@
+import * as path from "path";
 import * as vscode from "vscode";
 import { AttachmentService } from "../omp/attachmentService";
 import { logError, logWarn, showErrorLog } from "../omp/errorLog";
 import { pickMode, pickModel } from "../omp/modelCatalog";
+import type { OmpProfileContext } from "../omp/profiles";
 import { formatSessionWhen, listOmpSessions } from "../omp/sessionCatalog";
 import { formatSessionPlainText, suggestExportFileName } from "../omp/sessionTranscript";
 import type { TabManager } from "../omp/tabManager";
@@ -21,6 +23,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private readonly extensionUri: vscode.Uri,
     private readonly sessions: TabManager,
     storageUri: vscode.Uri,
+    private readonly profileContext?: () => OmpProfileContext,
   ) {
     this.attachments = new AttachmentService(sessions, storageUri);
     this.displayName = this.resolveDisplayName();
@@ -78,7 +81,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.onMessage(raw);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.post({ type: "error", message });
+        if ("tabId" in raw) {
+          this.post({
+            type: "inspection",
+            snapshot: {
+              ...this.sessions.active().getInspection(),
+              tabId: this.sessions.getActiveId(),
+              error: message,
+            },
+          });
+        } else {
+          this.post({ type: "error", message });
+        }
       }
     });
 
@@ -141,7 +155,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async onMessage(msg: WebviewToHost): Promise<void> {
+    if ("tabId" in msg && msg.tabId !== this.sessions.getActiveId()) return;
+    const session = this.sessions.active();
     switch (msg.type) {
+      case "pickProfile":
+        await vscode.commands.executeCommand("ompChat.pickProfile");
+        break;
+      case "openOmpConfig":
+        await vscode.commands.executeCommand("ompChat.openConfig");
+        break;
+      case "applyOmpConfig":
+        await vscode.commands.executeCommand("ompChat.applyConfig");
+        break;
+      case "inspectAgents":
+        await session.refreshInspection();
+        this.postInspection();
+        break;
+      case "inspectAgent":
+        await session.inspectAgent(msg.id);
+        break;
+      case "steerAgent":
+        await session.steerAgent(msg.id, msg.message);
+        break;
+      case "cancelAgent":
+        await session.cancelAgent(msg.id);
+        break;
+      case "steerMain":
+        await session.steer(msg.message);
+        this.post({ type: "steeringAccepted", tabId: msg.tabId, message: msg.message });
+        break;
+      case "exportAgentTranscript": {
+        const messages = await session.getAgentTranscript(msg.id);
+        const doc = await vscode.workspace.openTextDocument({
+          language: "json",
+          content: JSON.stringify(messages, null, 2),
+        });
+        await vscode.window.showTextDocument(doc, { preview: false });
+        break;
+      }
+      case "advisorAction":
+        if (!["on", "off", "status"].includes(msg.action))
+          throw new Error("Unknown advisor action.");
+        await session.send(`/advisor ${msg.action}`, { includeAttachments: false });
+        break;
+      case "prewalkAction":
+        await session.send("/prewalk", { includeAttachments: false });
+        break;
+      case "reviewChanges":
+        await vscode.commands.executeCommand("workbench.view.scm");
+        break;
       case "ready":
         this.postState();
         void this.sessions.ensureStarted().catch((err) => {
@@ -291,6 +353,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           confirmed: msg.confirmed,
           value: msg.value,
           cancelled: msg.cancelled,
+          answers: msg.answers,
         });
         break;
       case "openFile": {
@@ -365,6 +428,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value)) {
       return vscode.Uri.file(value);
     }
+    if (this.profileContext)
+      return vscode.Uri.joinPath(vscode.Uri.file(this.profileContext().cwd), value);
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder) {
       return undefined;
@@ -400,6 +465,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       attachments: this.sessions.getAttachments(),
       showThinking,
       model: this.currentModelLabel(),
+      profile: this.profileContext?.().label,
       mode: this.mode,
       displayName: this.displayName,
       contextUsage: this.sessions.getContextUsage(),
@@ -407,10 +473,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       activeTabId: this.sessions.getActiveId(),
       uiQuestion: this.sessions.getUiQuestion(),
     });
+    this.postInspection();
   }
 
   private post(message: HostToWebview): void {
     void this.view?.webview.postMessage(message);
+  }
+
+  private postInspection(): void {
+    this.post({
+      type: "inspection",
+      snapshot: { ...this.sessions.active().getInspection(), tabId: this.sessions.getActiveId() },
+    });
   }
 
   private getHtml(webview: vscode.Webview): string {
@@ -419,6 +493,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     );
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "media", "chat.js"),
+    );
+    const agentsStyleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "agents.css"),
+    );
+    const agentsScriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "agents.js"),
     );
     const nonce = String(Date.now());
 
@@ -430,6 +510,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; font-src ${webview.cspSource}; img-src ${webview.cspSource} data: blob:;" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="${styleUri}" />
+  <link rel="stylesheet" href="${agentsStyleUri}" />
   <title>OMP Chat</title>
 </head>
 <body>
@@ -462,6 +543,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       </div>
     </div>
 
+    <div id="agent-inspector"></div>
     <div id="activeQuestion" class="active-question" hidden></div>
     <div id="uiQuestion" class="ui-question" hidden></div>
 
@@ -540,6 +622,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               <span id="modeLabel" class="pill-label">Agent</span>
               <span class="chev">▾</span>
             </button>
+            <button id="profileBtn" class="pill" title="Select the active OMP profile">
+              <span id="profileLabel" class="pill-label">Profile</span>
+              <span class="chev">▾</span>
+            </button>
+            <button id="ompConfigBtn" class="pill" title="Edit OMP profile, project or overlay config">Config</button>
+            <button id="applyOmpConfigBtn" class="pill" title="Restart settled OMP sessions with current configuration">Apply config</button>
             <button id="usageBtn" class="usage-chip" title="Context usage this session" type="button">
               <svg id="usageRing" class="usage-ring" viewBox="0 0 28 28" aria-hidden="true">
                 <circle class="usage-track" cx="14" cy="14" r="11"></circle>
@@ -564,19 +652,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     </footer>
   </div>
   <script nonce="${nonce}" src="${scriptUri}"></script>
+  <script nonce="${nonce}" src="${agentsScriptUri}"></script>
 </body>
 </html>`;
   }
 
   private async pickModelAndApply(): Promise<void> {
+    if (this.sessions.getTabs().some((tab) => tab.busy))
+      throw new Error("Wait for OMP work to settle before changing its model.");
+    const tabId = this.sessions.getActiveId();
+    const profileKey = this.profileContext?.().key;
     const cfg = vscode.workspace.getConfiguration("ompChat");
     const ompPath = cfg.get<string>("ompPath", "omp") || "omp";
     const current = cfg.get<string>("model", "") || "";
-    const selected = await pickModel(ompPath, current);
+    const models = await this.sessions.active().getAvailableModels();
+    const selected = await pickModel(
+      ompPath,
+      current,
+      this.profileContext?.().profile ?? "default",
+      models,
+    );
     if (selected === undefined) {
       return;
     }
+    if (this.sessions.getActiveId() !== tabId || this.profileContext?.().key !== profileKey) return;
+    if (this.sessions.getTabs().some((tab) => tab.busy))
+      throw new Error(
+        "OMP started work while the model picker was open. Try again after it settles.",
+      );
     await cfg.update("model", selected, vscode.ConfigurationTarget.Workspace);
+    if (this.sessions.getActiveId() !== tabId || this.profileContext?.().key !== profileKey) return;
+    if (this.sessions.getTabs().some((tab) => tab.busy || tab.status === "starting"))
+      throw new Error(
+        "OMP started work while saving the model choice. Apply it after work settles.",
+      );
     this.post({
       type: "config",
       model: selected.trim() ? selected : "Default",
@@ -605,13 +714,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async showTabPicker(): Promise<void> {
-    const cwd = this.sessions.getWorkspaceCwdPath();
+    const profileKey = this.profileContext?.().key;
+    const cwd = this.profileContext?.().cwd ?? this.sessions.getWorkspaceCwdPath();
     const openIds = this.sessions.getOpenOmpSessionIds();
     const activeTabId = this.sessions.getActiveId();
 
     let history: Awaited<ReturnType<typeof listOmpSessions>> = [];
     try {
-      history = await listOmpSessions(cwd);
+      const observedFile = this.sessions.active().getSessionFile();
+      history = await listOmpSessions(
+        cwd,
+        observedFile ? path.dirname(observedFile) : this.profileContext?.().sessionsDir,
+        Boolean(observedFile),
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logWarn("Could not load session history", err);
@@ -667,6 +782,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!picked) {
       return;
     }
+    if (this.profileContext?.().key !== profileKey || this.sessions.getActiveId() !== activeTabId)
+      return;
     if (picked.action === "new") {
       await this.sessions.newChat();
     } else if (picked.sessionId) {
@@ -761,7 +878,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     try {
-      await this.sessions.restartAll();
+      await vscode.commands.executeCommand("ompChat.applyConfig");
       this.postState();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -941,6 +1058,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         fsPath: active.uri.fsPath,
         kind: "file",
         label: "Current file",
+        attach: active.isDirty,
         detail: vscode.workspace.asRelativePath(active.uri, false),
       });
     }
@@ -952,6 +1070,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         fsPath: doc.uri.fsPath,
         kind: "file",
         detail: "Open editor",
+        attach: doc.isDirty,
       });
     }
 

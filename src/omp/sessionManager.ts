@@ -4,12 +4,17 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { cleanChatTitle } from "./chatTitle";
 import { logError, logWarn } from "./errorLog";
+import { InspectionService } from "./inspectionService";
+import type { InspectionSnapshot } from "./inspectionTypes";
 import { preloadOmpModels } from "./modelCatalog";
 import { OmpRpcClient } from "./rpcClient";
+import { resolveOmpPath } from "./runtimePath";
 import { chatMessagesFromOmp, messagesFromSessionFile } from "./sessionHistory";
 import { logToolFileTouch } from "./toolFileLog";
 import { collectToolFileRefs, collectToolPaths, preview } from "./toolPaths";
 import type {
+  AskAnswer,
+  AskQuestion,
   Attachment,
   ChatMessage,
   ContextUsage,
@@ -103,9 +108,24 @@ function partsFromAssistantMessage(message: Record<string, unknown>): MessagePar
     if (part.type === "text" && typeof part.text === "string" && part.text) {
       parts.push({ kind: "text", text: part.text });
     }
+    if (part.type === "toolCall" && typeof part.id === "string") {
+      parts.push({
+        kind: "tool",
+        id: part.id,
+        name: String(part.name ?? "tool"),
+        status: "running",
+        inputPreview: preview(part.arguments),
+        fileRefs: collectToolFileRefs(part.arguments),
+        filePaths: collectToolPaths(part.arguments),
+      });
+    }
   }
   const errorRaw = message.errorMessage ?? message.error;
-  if (typeof errorRaw === "string" && errorRaw.trim() && !parts.some((part) => part.kind === "text")) {
+  if (
+    typeof errorRaw === "string" &&
+    errorRaw.trim() &&
+    !parts.some((part) => part.kind === "text")
+  ) {
     parts.push({ kind: "text", text: summarizeProviderError(errorRaw) });
   }
   return parts;
@@ -113,6 +133,10 @@ function partsFromAssistantMessage(message: Record<string, unknown>): MessagePar
 
 export class SessionManager {
   private client: OmpRpcClient | undefined;
+  private inspection: InspectionService | undefined;
+  private inspectionSnapshot: InspectionSnapshot = { agents: [], notices: [] };
+  private starting: Promise<void> | undefined;
+  private awaitingPromptStart = false;
   private status: SessionStatus = { state: "stopped" };
   private messages: ChatMessage[] = [];
   private attachments: Attachment[] = [];
@@ -124,6 +148,9 @@ export class SessionManager {
   /** Agent / omp-generated display title for this session. */
   private sessionTitle: string | undefined;
   private restoringHistory = false;
+  private disposed = false;
+  private shutdown?: Promise<void>;
+  private lifecycle = 0;
   /** Prompts waiting for the current turn to finish before being sent. */
   private pendingPrompts: Array<{ id: string; text: string; composed: string }> = [];
   /** True while Stop is waiting for the aborted turn to settle before resuming the queue. */
@@ -143,6 +170,7 @@ export class SessionManager {
   constructor(
     private readonly getWorkspaceCwd: () => string,
     private readonly sessionIdStore?: SessionIdStore,
+    private readonly runtimeOptions: Partial<OmpClientOptions> = {},
   ) {}
 
   getStatus(): SessionStatus {
@@ -153,10 +181,79 @@ export class SessionManager {
     return this.messages;
   }
 
+  getInspection(): InspectionSnapshot {
+    return this.inspectionSnapshot;
+  }
+
+  async refreshInspection(): Promise<void> {
+    await this.ensureStarted();
+    await this.inspection?.refresh();
+  }
+
+  async inspectAgent(id: string): Promise<void> {
+    await this.ensureStarted();
+    await this.inspection?.select(id);
+  }
+
+  async steerAgent(id: string, message: string): Promise<void> {
+    await this.ensureStarted();
+    if (!message.trim()) throw new Error("Enter a steering message first.");
+    await this.inspection?.steer(id, message.trim());
+  }
+
+  async cancelAgent(id: string): Promise<void> {
+    await this.ensureStarted();
+    await this.inspection?.cancel(id);
+  }
+
+  async getAgentTranscript(id: string): Promise<unknown[]> {
+    await this.ensureStarted();
+    if (!this.inspection) throw new Error("OMP inspector is not connected.");
+    return this.inspection.getTranscript(id);
+  }
+
+  async steer(message: string): Promise<void> {
+    await this.ensureStarted();
+    const client = this.client!;
+    const text = message.trim();
+    if (!text || this.status.state !== "busy")
+      throw new Error("Steering requires an active main agent and a message.");
+    const response = await client.request({ type: "steer", message: text });
+    if (response.success === false) throw new Error(String(response.error ?? "Steering failed"));
+    if (client !== this.client) return;
+    this.messages.push({
+      id: randomUUID(),
+      role: "user",
+      createdAt: Date.now(),
+      parts: [{ kind: "text", text }],
+    });
+    this.notify();
+  }
+
+  async getAvailableModels(): Promise<import("./modelCatalog").OmpModelInfo[]> {
+    await this.ensureStarted();
+    const response = await this.client!.request({ type: "get_available_models" });
+    if (response.success === false)
+      throw new Error(String(response.error ?? "Could not list OMP models"));
+    const data = response.data as { models?: Record<string, unknown>[] };
+    return (data.models ?? []).map((model) => ({
+      provider: String(model.provider ?? ""),
+      id: String(model.id),
+      name: String(model.name ?? model.id),
+      selector: `${String(model.provider)}/${String(model.id)}`,
+      contextWindow: Number(model.contextWindow),
+      reasoning: Boolean(model.reasoning),
+    }));
+  }
+
   getSessionId(): string | undefined {
     const id = this.sessionId ?? this.sessionIdStore?.get();
     const trimmed = id?.trim();
     return trimmed || undefined;
+  }
+
+  getSessionFile(): string | undefined {
+    return this.sessionFile;
   }
 
   /** omp / agent-generated session title, when available. */
@@ -237,7 +334,7 @@ export class SessionManager {
   private readConfig(overrides?: Partial<OmpClientOptions>): OmpClientOptions {
     const cfg = vscode.workspace.getConfiguration("ompChat");
     return {
-      ompPath: cfg.get<string>("ompPath", "omp") || "omp",
+      ompPath: resolveOmpPath(cfg.get<string>("ompPath", "omp") || "omp"),
       cwd: this.getWorkspaceCwd(),
       model: cfg.get<string>("model", "") || undefined,
       thinking: cfg.get<string>("thinking", "") || undefined,
@@ -246,15 +343,22 @@ export class SessionManager {
       continueLastSession: cfg.get<boolean>("continueLastSession", false),
       extraArgs: cfg.get<string[]>("extraArgs", []),
       titleExtensionPath: resolveTitleExtensionPath(),
+      ...this.runtimeOptions,
       ...overrides,
     };
   }
 
   async ensureStarted(options?: Partial<OmpClientOptions>): Promise<void> {
+    if (this.disposed) throw new Error("This OMP chat has been closed.");
     if (this.client?.isRunning && this.client.isReady) {
       return;
     }
-    await this.start(options ?? this.defaultStartOptions());
+    if (!this.starting) {
+      this.starting = this.start(options ?? this.defaultStartOptions()).finally(() => {
+        this.starting = undefined;
+      });
+    }
+    await this.starting;
   }
 
   private defaultStartOptions(): Partial<OmpClientOptions> {
@@ -273,7 +377,11 @@ export class SessionManager {
   }
 
   async start(overrides?: Partial<OmpClientOptions>): Promise<void> {
+    if (this.disposed) throw new Error("This OMP chat has been closed.");
+    const lifecycle = ++this.lifecycle;
     await this.disposeClient();
+    if (this.disposed || lifecycle !== this.lifecycle)
+      throw new Error("OMP session startup was cancelled.");
     this.pendingPrompts = [];
     this.thinkingStartedAt = undefined;
     this.clearUiQuestions({ cancelRemote: false });
@@ -293,6 +401,7 @@ export class SessionManager {
     const options = this.readConfig(overrides);
     const client = new OmpRpcClient(options);
     this.client = client;
+    const earlyInspectionEvents: OmpRpcEvent[] = [];
 
     // Capture stderr during this attempt so we can distinguish a stale
     // --resume target (omp exits before ready with "not found") from a
@@ -306,16 +415,19 @@ export class SessionManager {
       Boolean(options.resumeSessionId) && /not found/i.test(attemptStderr.join("\n"));
 
     client.on("ready", () => {
+      if (this.client !== client) return;
       this.setStatus({ state: "ready", detail: "Connected to omp" });
-      void this.onSessionReady(options);
+      void this.onSessionReady(options, client);
     });
 
     client.on("error", (err) => {
+      if (this.client !== client) return;
       logError("omp RPC client error", err);
       this.setStatus({ state: "error", detail: err.message });
     });
 
     client.on("exit", (code) => {
+      if (this.client !== client) return;
       if (this.status.state !== "stopped") {
         // A stale --resume target exits before ready; start() recovers with a
         // fresh session below. Keep this out of the error log and don't flash
@@ -332,6 +444,7 @@ export class SessionManager {
     });
 
     client.on("stderr", (line) => {
+      if (this.client !== client) return;
       // Surface interesting failures without spamming every line.
       if (/error|fail|not found/i.test(line)) {
         // The stale-resume "Session not found" line is handled by the
@@ -341,16 +454,55 @@ export class SessionManager {
           return;
         }
         logWarn(`omp stderr: ${line.slice(0, 500)}`);
-        this.setStatus({ state: "error", detail: line.slice(0, 240) });
+        if (client.isReady) {
+          // Settings watchers retain the last valid YAML on edit errors. Keep an
+          // active turn busy while showing diagnostics, rather than dispatching
+          // a queued follow-up into a still-running OMP process.
+          this.messages.push({
+            id: randomUUID(),
+            role: "system",
+            createdAt: Date.now(),
+            parts: [{ kind: "text", text: line }],
+          });
+          this.notify();
+        } else this.setStatus({ state: "error", detail: line.slice(0, 240) });
       }
     });
 
-    client.on("event", (event) => this.handleEvent(event));
+    client.on("event", (event) => {
+      if (this.client !== client) return;
+      this.handleEvent(event);
+      if (
+        !this.inspection &&
+        (event.type === "notice" ||
+          event.type.startsWith("subagent_") ||
+          event.type === "advisor_yielded")
+      ) {
+        earlyInspectionEvents.push(event);
+      }
+    });
 
     try {
       await client.start();
+      if (this.client === client) {
+        this.inspection = new InspectionService(
+          client,
+          (snapshot) => {
+            if (this.client !== client) return;
+            this.inspectionSnapshot = snapshot;
+            this.notify();
+          },
+          earlyInspectionEvents,
+        );
+        void this.inspection.start().catch((err) => {
+          logWarn("Could not start OMP inspector", err);
+          this.inspectionSnapshot = { ...this.inspectionSnapshot, error: String(err) };
+          this.notify();
+        });
+      }
     } catch (err) {
       client.off("stderr", stderrCollector);
+      if (this.disposed || this.client !== client) throw err;
       const message = err instanceof Error ? err.message : String(err);
       // omp exits before emitting "ready" when --resume points at a session
       // that no longer exists (deleted / expired / different state dir).
@@ -366,7 +518,10 @@ export class SessionManager {
       logError("Failed to start omp RPC session", err);
       this.setStatus({
         state: "error",
-        detail: `${message}. Is omp installed and on PATH?`,
+        detail:
+          process.platform === "win32"
+            ? `${message}. Your OMP is in WSL: open this folder with WSL: Reopen Folder in WSL, then open OMP.`
+            : `${message}. Set ompChat.ompPath to your OMP executable if it is outside ~/.bun/bin or ~/.local/bin.`,
       });
       throw err;
     }
@@ -392,6 +547,7 @@ export class SessionManager {
       this.abortedTurnTimer = undefined;
     }
     this.messages = [];
+    this.inspectionSnapshot = { agents: [], notices: [] };
     this.currentAssistantId = undefined;
     this.attachments = [];
     this.pendingPrompts = [];
@@ -445,9 +601,10 @@ export class SessionManager {
     this.notify();
   }
 
-  async send(text: string): Promise<void> {
+  async send(text: string, options: { includeAttachments?: boolean } = {}): Promise<void> {
     const trimmed = text.trim();
-    if (!trimmed && this.attachments.length === 0) {
+    const includeAttachments = options.includeAttachments !== false;
+    if (!trimmed && (!includeAttachments || this.attachments.length === 0)) {
       return;
     }
 
@@ -456,8 +613,10 @@ export class SessionManager {
       throw new Error("omp session is not ready");
     }
 
-    const composed = this.composePrompt(trimmed);
-    const messageAttachments = this.attachments.map((att) => ({ ...att }));
+    const composed = this.composePrompt(trimmed, includeAttachments ? this.attachments : []);
+    const messageAttachments = includeAttachments
+      ? this.attachments.map((att) => ({ ...att }))
+      : [];
     const busy = this.status.state === "busy";
     const userMessage: ChatMessage = {
       id: randomUUID(),
@@ -469,7 +628,7 @@ export class SessionManager {
       queued: busy,
     };
     this.messages = [...this.messages, userMessage];
-    this.attachments = [];
+    if (includeAttachments) this.attachments = [];
 
     if (busy) {
       this.pendingPrompts.push({ id: userMessage.id, text: trimmed, composed });
@@ -607,7 +766,7 @@ export class SessionManager {
   abort(): void {
     this.client?.abort();
     // Stop only cancels the in-flight turn. Keep queued follow-ups and resume
-    // them after the aborted turn settles (agent_end or a short fallback).
+    // them after OMP confirms that the whole session has settled.
     this.clearUiQuestions({ cancelRemote: true });
     if (this.currentAssistantId) {
       this.patchMessage(this.currentAssistantId, (msg) => ({
@@ -626,11 +785,11 @@ export class SessionManager {
     if (this.abortedTurnTimer) {
       clearTimeout(this.abortedTurnTimer);
     }
-    // If omp never emits agent_end for the abort, settle locally so the queue
-    // cannot get stuck behind a permanent "busy" state.
+    // Older OMP may omit session_settled; ask its state rather than assuming
+    // cancellation completed while worker/advisor background work is still running.
     this.abortedTurnTimer = setTimeout(() => {
       this.abortedTurnTimer = undefined;
-      this.finishAbortedTurn();
+      void this.completeIfSettled();
     }, 500);
   }
 
@@ -657,6 +816,7 @@ export class SessionManager {
       throw new Error("omp session is not ready");
     }
     this.currentAssistantId = undefined;
+    this.awaitingPromptStart = true;
     this.setStatus({ state: "busy", detail: "Generating…" });
     this.notify();
     this.client.prompt(composed);
@@ -743,7 +903,28 @@ export class SessionManager {
     });
   }
 
+  private async completeIfSettled(): Promise<void> {
+    const client = this.client;
+    if (!client?.isReady) return;
+    try {
+      const state = await client.getState();
+      if (
+        client !== this.client ||
+        this.awaitingPromptStart ||
+        state.isStreaming ||
+        state.isCompacting ||
+        state.hasPendingAsyncWork ||
+        state.isSettled === false
+      )
+        return;
+      this.markTurnComplete();
+    } catch {
+      // A current OMP session emits session_settled when completion is definitive.
+    }
+  }
+
   private markTurnComplete(): void {
+    this.awaitingPromptStart = false;
     // Stop requested: this settle belongs to the aborted turn — resume queue.
     if (this.abortedTurn) {
       this.finishAbortedTurn();
@@ -828,21 +1009,26 @@ export class SessionManager {
     this.titleRefreshTimers = [];
   }
 
-  private composePrompt(userText: string): string {
-    if (this.attachments.length === 0) {
-      return userText;
+  private composePrompt(userText: string, attachments = this.attachments): string {
+    // Modes express intent to OMP. Approval/tool policy remains owned by OMP.
+    const mode = vscode.workspace.getConfiguration("ompChat").get<string>("mode", "Agent");
+    let promptText = userText;
+    if (!userText.startsWith("/")) {
+      if (mode === "Ask")
+        promptText = `Mode: Ask. Answer the user's question. Use read tools as needed; do not modify files or run state-changing commands.\n\n${userText}`;
+      if (mode === "Plan")
+        promptText = `Mode: Plan. Investigate with read tools and propose a concrete implementation plan. Do not modify files or run state-changing commands.\n\n${userText}`;
+    }
+    if (attachments.length === 0) {
+      return promptText;
     }
 
     const mentions: string[] = [];
     const blocks: string[] = [];
 
-    for (const att of this.attachments) {
+    for (const att of attachments) {
       // Selections / inline text must stay embedded; @path would attach the whole file.
-      if (
-        (att.kind === "selection" || att.kind === "text") &&
-        att.content != null &&
-        att.content !== ""
-      ) {
+      if ((att.kind === "selection" || att.kind === "text") && att.content != null) {
         const fence = att.language || "";
         const header = att.path ? `File: ${att.path}` : att.label;
         blocks.push(`${header}\n\`\`\`${fence}\n${att.content}\n\`\`\``);
@@ -855,7 +1041,7 @@ export class SessionManager {
         continue;
       }
 
-      if (att.content != null && att.content !== "") {
+      if (att.content != null) {
         const fence = att.language || "";
         const header = att.path ? `File: ${att.path}` : att.label;
         blocks.push(`${header}\n\`\`\`${fence}\n${att.content}\n\`\`\``);
@@ -865,8 +1051,8 @@ export class SessionManager {
     }
 
     const parts: string[] = [];
-    if (userText) {
-      parts.push(userText);
+    if (promptText) {
+      parts.push(promptText);
     }
     if (mentions.length) {
       // Trailing mentions keep the user text readable while still triggering omp fileMention.
@@ -1044,8 +1230,12 @@ export class SessionManager {
 
   private handleEvent(event: OmpRpcEvent): void {
     switch (event.type) {
+      case "model_changed":
+        void this.refreshSessionState();
+        break;
       case "agent_start":
       case "turn_start":
+        this.awaitingPromptStart = false;
         this.setStatus({ state: "busy", detail: "Generating…" });
         break;
       case "message_start": {
@@ -1186,8 +1376,37 @@ export class SessionManager {
         }
         break;
       case "agent_end":
-        this.markTurnComplete();
+        if (event.isTerminal !== false && !this.awaitingPromptStart) void this.completeIfSettled();
         break;
+      case "session_settled":
+        if (!this.awaitingPromptStart) this.markTurnComplete();
+        break;
+      case "command_output": {
+        const detail = String(event.text ?? event.output ?? "");
+        if (detail) {
+          this.messages.push({
+            id: randomUUID(),
+            role: "system",
+            createdAt: Date.now(),
+            parts: [{ kind: "text", text: detail }],
+          });
+          this.notify();
+        }
+        break;
+      }
+      case "notice": {
+        const detail = String(event.message ?? event.text ?? "");
+        if (detail) {
+          this.messages.push({
+            id: randomUUID(),
+            role: "system",
+            createdAt: Date.now(),
+            parts: [{ kind: "text", text: `${String(event.source ?? "OMP")}: ${detail}` }],
+          });
+          this.notify();
+        }
+        break;
+      }
       case "prompt_error":
       case "error": {
         const message = String(event.error ?? event.message ?? "Unknown omp error");
@@ -1231,19 +1450,79 @@ export class SessionManager {
     if (message.role != null && message.role !== "assistant") {
       return;
     }
-    const parts = partsFromAssistantMessage(message);
-    if (parts.length === 0) {
+    const existing = this.messages.find((item) => item.id === this.currentAssistantId);
+    if (
+      !partsFromAssistantMessage(message).length &&
+      !existing?.parts.some((part) => part.kind === "thinking" && part.text)
+    )
       return;
-    }
     const msg = this.ensureAssistantMessage();
+    const knownThinking = msg.parts.filter((part) => part.kind === "thinking");
+    let thinkingIndex = 0;
+    const content = Array.isArray(message.content) ? message.content : [];
+    const hasThinking = content.some(
+      (part) =>
+        part && typeof part === "object" && (part as Record<string, unknown>).type === "thinking",
+    );
+    // Some providers omit public reasoning from the final snapshot or send an
+    // empty block alongside an opaque signature. Keep text already streamed.
+    const snapshot = {
+      ...message,
+      content: content.map((item) => {
+        if (
+          !item ||
+          typeof item !== "object" ||
+          (item as Record<string, unknown>).type !== "thinking"
+        )
+          return item;
+        const part = item as Record<string, unknown>;
+        const previous = knownThinking[thinkingIndex++];
+        const incoming = typeof part.thinking === "string" ? part.thinking : "";
+        const thinking =
+          previous && (!incoming || previous.text.startsWith(incoming)) ? previous.text : incoming;
+        return { ...part, thinking };
+      }),
+    };
+    const parts = partsFromAssistantMessage(snapshot);
+    if (!hasThinking) {
+      msg.parts.forEach((part, index) => {
+        if (part.kind === "thinking" && part.text)
+          parts.splice(Math.min(index, parts.length), 0, { ...part, streaming: false });
+      });
+    }
+    if (parts.length === 0) return;
+    thinkingIndex = 0;
     this.patchMessage(msg.id, (current) => ({
       ...current,
       streaming,
-      parts,
+      parts: [
+        ...parts.map((part) => {
+          if (part.kind === "thinking") {
+            const previous = knownThinking[thinkingIndex++];
+            return previous ? { ...previous, ...part } : part;
+          }
+          if (part.kind !== "tool") return part;
+          const existing = current.parts.find(
+            (candidate) => candidate.kind === "tool" && candidate.id === part.id,
+          );
+          return existing?.kind === "tool" ? { ...part, ...existing } : part;
+        }),
+        ...current.parts.filter(
+          (part) =>
+            part.kind === "tool" &&
+            !parts.some((next) => next.kind === "tool" && next.id === part.id),
+        ),
+      ],
     }));
+    this.applyAssistantTimingMeta(message);
     const errorPart = parts.find((part) => part.kind === "text");
     const errorRaw = message.errorMessage ?? message.error;
-    if (typeof errorRaw === "string" && errorRaw.trim() && errorPart?.kind === "text" && this.status.state === "busy") {
+    if (
+      typeof errorRaw === "string" &&
+      errorRaw.trim() &&
+      errorPart?.kind === "text" &&
+      this.status.state === "busy"
+    ) {
       this.setStatus({ state: "busy", detail: errorPart.text });
     }
   }
@@ -1377,8 +1656,9 @@ export class SessionManager {
     };
   }
 
-  private async onSessionReady(_options: OmpClientOptions): Promise<void> {
+  private async onSessionReady(_options: OmpClientOptions, client = this.client): Promise<void> {
     await this.refreshSessionState();
+    if (client !== this.client) return;
     // After VS Code is killed, local transcript is gone — reload from omp session.
     if (this.messages.length === 0) {
       await this.hydrateMessagesFromSession();
@@ -1387,7 +1667,7 @@ export class SessionManager {
     // startup preload missed (e.g. omp wasn't on PATH at activate time); a cache
     // hit returns instantly so this is cheap on every session.
     const ompPath = this.readConfig().ompPath;
-    void preloadOmpModels(ompPath).catch(() => {
+    void preloadOmpModels(ompPath, this.runtimeOptions.profile).catch(() => {
       // Picker falls back to a fresh fetch on miss.
     });
   }
@@ -1400,17 +1680,19 @@ export class SessionManager {
     if (this.messages.length > 0) {
       return;
     }
+    const client = this.client;
     this.restoringHistory = true;
     try {
       let raw: unknown[] = [];
       try {
-        raw = await this.client.getMessages();
+        raw = await client.getMessages();
       } catch (err) {
         // Large sessions often exceed omp's 1 MiB RPC frame limit.
         logWarn("get_messages failed; falling back to session file", err);
         raw = [];
       }
 
+      if (client !== this.client || this.messages.length > 0) return;
       if (raw.length === 0) {
         const sessionFile = await this.resolveSessionFile();
         if (sessionFile) {
@@ -1419,7 +1701,7 @@ export class SessionManager {
       }
 
       const restored = chatMessagesFromOmp(raw);
-      if (restored.length > 0) {
+      if (client === this.client && this.messages.length === 0 && restored.length > 0) {
         this.messages = restored;
         this.currentAssistantId = undefined;
         this.notify();
@@ -1428,7 +1710,7 @@ export class SessionManager {
       // Non-fatal: chat can continue without restored transcript.
       logError("Failed to restore transcript from omp session", err);
     } finally {
-      this.restoringHistory = false;
+      if (client === this.client) this.restoringHistory = false;
     }
   }
 
@@ -1439,8 +1721,10 @@ export class SessionManager {
     if (!this.client?.isReady) {
       return undefined;
     }
+    const client = this.client;
     try {
-      const state = await this.client.getState();
+      const state = await client.getState();
+      if (client !== this.client) return undefined;
       const file = state.sessionFile;
       if (typeof file === "string" && file.trim()) {
         this.sessionFile = file.trim();
@@ -1456,8 +1740,10 @@ export class SessionManager {
     if (!this.client?.isReady) {
       return;
     }
+    const client = this.client;
     try {
-      const state = await this.client.getState();
+      const state = await client.getState();
+      if (client !== this.client) return;
       const sid = state.sessionId;
       if (typeof sid === "string" && sid.trim()) {
         this.sessionId = sid.trim();
@@ -1496,11 +1782,39 @@ export class SessionManager {
 
   answerUiQuestion(
     id: string,
-    answer: { confirmed?: boolean; value?: string; cancelled?: boolean; timedOut?: boolean },
+    answer: {
+      confirmed?: boolean;
+      value?: string;
+      cancelled?: boolean;
+      timedOut?: boolean;
+      answers?: AskAnswer[];
+    },
   ): void {
     const idx = this.pendingUiQuestions.findIndex((q) => q.id === id);
     if (idx < 0) {
       return;
+    }
+    const question = this.pendingUiQuestions[idx];
+    if (question.method === "ask" && !answer.cancelled) {
+      const questions = question.questions ?? [];
+      if (!Array.isArray(answer.answers) || answer.answers.length !== questions.length) {
+        throw new Error("Answer each OMP question or cancel the dialog.");
+      }
+      for (let index = 0; index < questions.length; index++) {
+        const item = questions[index];
+        const reply = answer.answers[index];
+        if (
+          reply.id !== item.id ||
+          !Array.isArray(reply.selectedOptions) ||
+          reply.selectedOptions.some(
+            (label) => !item.options.some((option) => option.label === label),
+          ) ||
+          (!item.multi && reply.selectedOptions.length > 1) ||
+          (!reply.selectedOptions.length && !reply.customInput?.trim())
+        ) {
+          throw new Error(`Choose an option or enter an answer for: ${item.question}`);
+        }
+      }
     }
     this.clearUiQuestionTimer(id);
     this.pendingUiQuestions = this.pendingUiQuestions.filter((q) => q.id !== id);
@@ -1514,6 +1828,8 @@ export class SessionManager {
           cancelled: true,
           ...(answer.timedOut ? { timedOut: true } : {}),
         });
+      } else if (answer.answers) {
+        this.client.respondExtensionUi(id, { answers: answer.answers });
       } else if (typeof answer.confirmed === "boolean") {
         this.client.respondExtensionUi(id, { confirmed: answer.confirmed });
       } else if (typeof answer.value === "string") {
@@ -1597,7 +1913,13 @@ export class SessionManager {
       return;
     }
 
-    if (method !== "select" && method !== "confirm" && method !== "input" && method !== "editor") {
+    if (
+      method !== "ask" &&
+      method !== "select" &&
+      method !== "confirm" &&
+      method !== "input" &&
+      method !== "editor"
+    ) {
       // Unknown interactive method — cancel so omp does not hang.
       try {
         this.client?.respondExtensionUi(id, { cancelled: true });
@@ -1627,6 +1949,10 @@ export class SessionManager {
       prefill: event.prefill != null ? String(event.prefill) : undefined,
       timeoutMs,
       createdAt: Date.now(),
+      questions:
+        method === "ask" && Array.isArray(event.questions)
+          ? (event.questions as AskQuestion[])
+          : undefined,
     };
 
     // Replace any existing question with the same id.
@@ -1676,13 +2002,24 @@ export class SessionManager {
   }
 
   async dispose(): Promise<void> {
+    if (this.shutdown) return this.shutdown;
+    this.disposed = true;
+    this.lifecycle++;
     this.clearTitleRefreshTimers();
-    await this.disposeClient();
-    this.setStatus({ state: "stopped" });
-    this._onDidChange.dispose();
+    if (this.abortedTurnTimer) clearTimeout(this.abortedTurnTimer);
+    this.abortedTurnTimer = undefined;
+    this.shutdown = (async () => {
+      await this.disposeClient();
+      this.setStatus({ state: "stopped" });
+      this._onDidChange.dispose();
+    })();
+    return this.shutdown;
   }
 
   private async disposeClient(): Promise<void> {
+    this.restoringHistory = false;
+    this.inspection?.dispose();
+    this.inspection = undefined;
     this.clearUiQuestions({ cancelRemote: false });
     if (!this.client) {
       return;

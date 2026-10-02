@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import * as vscode from "vscode";
+import { resolveOmpPath } from "./runtimePath";
 
 const execFileAsync = promisify(execFile);
 
@@ -21,9 +22,11 @@ function formatTokens(n?: number): string {
   return String(n);
 }
 
-export async function listOmpModels(ompPath: string): Promise<OmpModelInfo[]> {
+export async function listOmpModels(ompPath: string, profile?: string): Promise<OmpModelInfo[]> {
+  ompPath = resolveOmpPath(ompPath);
+  const prefix = profile ? ["--profile", profile] : [];
   try {
-    const { stdout } = await execFileAsync(ompPath, ["models", "--json"], {
+    const { stdout } = await execFileAsync(ompPath, [...prefix, "models", "--json"], {
       timeout: 20_000,
       maxBuffer: 8 * 1024 * 1024,
       env: process.env,
@@ -44,7 +47,7 @@ export async function listOmpModels(ompPath: string): Promise<OmpModelInfo[]> {
   } catch {
     // Fallback: plain text listing
     try {
-      const { stdout } = await execFileAsync(ompPath, ["models"], {
+      const { stdout } = await execFileAsync(ompPath, [...prefix, "models"], {
         timeout: 15_000,
         maxBuffer: 2 * 1024 * 1024,
         env: process.env,
@@ -80,30 +83,40 @@ export function invalidateOmpModelCache(): void {
 // Fetch and store the model list for ompPath. A cache hit returns instantly
 // (the picker opens with no `omp models` round-trip); concurrent callers
 // share one in-flight fetch. Safe to fire-and-forget at startup.
-export async function preloadOmpModels(ompPath: string): Promise<OmpModelInfo[]> {
-  if (cachedOmpPath === ompPath && cachedModels) {
+export async function preloadOmpModels(ompPath: string, profile?: string): Promise<OmpModelInfo[]> {
+  const key = JSON.stringify([ompPath, profile]);
+  if (cachedOmpPath === key && cachedModels) {
     return cachedModels;
   }
-  if (preloadPromise && cachedOmpPath === ompPath) {
+  if (preloadPromise && cachedOmpPath === key) {
     return preloadPromise;
   }
-  cachedOmpPath = ompPath;
-  preloadPromise = listOmpModels(ompPath)
+  cachedOmpPath = key;
+  preloadPromise = listOmpModels(ompPath, profile)
     .then((models) => {
-      cachedModels = models;
-      preloadPromise = null;
+      if (cachedOmpPath === key) {
+        cachedModels = models;
+        preloadPromise = null;
+      }
       return models;
     })
     .catch((err) => {
-      preloadPromise = null;
-      cachedModels = null;
+      if (cachedOmpPath === key) {
+        preloadPromise = null;
+        cachedModels = null;
+      }
       throw err;
     });
   return preloadPromise;
 }
 
-export async function pickModel(ompPath: string, current?: string): Promise<string | undefined> {
-  const models = await preloadOmpModels(ompPath);
+export async function pickModel(
+  ompPath: string,
+  current?: string,
+  profile?: string,
+  available?: OmpModelInfo[],
+): Promise<string | undefined> {
+  const models = available ?? (await preloadOmpModels(ompPath, profile));
   if (models.length === 0) {
     const typed = await vscode.window.showInputBox({
       title: "Select OMP model",

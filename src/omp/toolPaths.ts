@@ -58,7 +58,10 @@ function positiveInt(value: unknown): number | undefined {
 }
 
 /** Parse omp line selectors: `120`, `120-140`, `120+20` (count), comma-lists use the first range. */
-export function parseLineSelector(sel: string | undefined | null): { line?: number; endLine?: number } {
+export function parseLineSelector(sel: string | undefined | null): {
+  line?: number;
+  endLine?: number;
+} {
   if (!sel) {
     return {};
   }
@@ -95,7 +98,11 @@ export function parseLineSelector(sel: string | undefined | null): { line?: numb
 }
 
 /** Strip trailing `:120` / `:120-140` selectors from a path-like string. */
-export function splitPathAndSelector(raw: string): { path: string; line?: number; endLine?: number } {
+export function splitPathAndSelector(raw: string): {
+  path: string;
+  line?: number;
+  endLine?: number;
+} {
   let path = String(raw || "").trim();
   const sels: string[] = [];
   for (let i = 0; i < 2; i += 1) {
@@ -272,9 +279,7 @@ export function collectToolFileRefs(value: unknown): ToolFileRef[] {
   } else if (endLineField != null) {
     rangeFromFields = { line: endLineField, endLine: endLineField };
   } else {
-    rangeFromFields = parseLineSelector(
-      typeof obj.sel === "string" ? obj.sel : undefined,
-    );
+    rangeFromFields = parseLineSelector(typeof obj.sel === "string" ? obj.sel : undefined);
   }
 
   for (const key of TOOL_PATH_KEYS) {
@@ -358,7 +363,17 @@ export function compactToolInput(value: unknown): unknown {
     }
   }
   // Keep line navigation fields even when input is compacted.
-  for (const key of ["offset", "limit", "sel", "startLine", "endLine", "start_line", "end_line", "line", "to"] as const) {
+  for (const key of [
+    "offset",
+    "limit",
+    "sel",
+    "startLine",
+    "endLine",
+    "start_line",
+    "end_line",
+    "line",
+    "to",
+  ] as const) {
     if (obj[key] != null) {
       slim[key] = obj[key];
     }
@@ -385,14 +400,13 @@ export function compactToolInput(value: unknown): unknown {
   return slim;
 }
 
-export function preview(value: unknown, max = 400): string | undefined {
+export function preview(value: unknown, _max = 400): string | undefined {
   if (value == null) {
     return undefined;
   }
-  const compact = compactToolInput(value);
-  const text = typeof compact === "string" ? compact : JSON.stringify(compact, null, 2);
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   if (!text) {
     return undefined;
   }
-  return text.length > max ? `${text.slice(0, max)}…` : text;
+  return text;
 }

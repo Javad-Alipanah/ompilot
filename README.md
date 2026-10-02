@@ -1,130 +1,77 @@
-# Oh My Pi Chat
+# OMPilot
 
-A VS Code extension that gives [Oh My Pi (`omp`)](https://omp.sh/) a **Copilot / Cursor-style chat sidebar**.
+[Oh My Pi](https://omp.sh/) inside Cursor, using your existing OMP runtime and provider setup. OMPilot adds a separate chat panel with session tabs, worker controls, advisor transcripts, and prewalk notices.
 
-It launches a local `omp --mode rpc` session and streams replies, thinking, and tool activity into a modern webview chat UI.
+Repository: [javad-alipanah/ompilot](https://github.com/javad-alipanah/ompilot). Forked from [Chakyiu/omp-vscode](https://github.com/Chakyiu/omp-vscode), under the [MIT license](LICENSE).
 
-## Features
+## Install in Windows Cursor with WSL
 
-- Multi-tab chats (each tab is its own `omp` session)
-- Agent-generated session titles on tabs (tiny/smol title model; disable with `ompChat.autoTitle`)
-- Right-click a chat tab to rename / view / export / copy the full session as plain text
-- Restores all open omp chat tabs/sessions after VS Code restarts or force-quits
-- History button lists all past omp sessions for the workspace and can resume any of them
+1. Confirm that `omp` works in your WSL terminal with your usual provider configuration. This bridge was verified against **OMP 18.4.10**.
+2. Open your project in Cursor, then run **WSL: Reopen Folder in WSL** from the Command Palette. Cursor's WSL support must be installed and connected.
+3. Download the VSIX from [Releases](https://github.com/javad-alipanah/ompilot/releases/latest). In that WSL window, run **Extensions: Install from VSIX…** and select it. Check the Extensions view: OMPilot should be installed in the WSL extension host; use **Install in WSL** if it is installed only locally. Reload the window once after installation.
+4. Run **OMP: Open Chat** from the Command Palette, or open the **OMPilot** activity bar icon.
+5. Send a prompt. If the extension cannot find OMP, set `ompChat.ompPath` in the WSL window to its Linux executable path, such as `/home/you/.bun/bin/omp`, then run **OMP: Restart Session**.
 
-- Model picker button (lists `omp models --json`, restarts session on change)
-- Per-session context usage meter from omp `get_state.contextUsage`
-
-
-- Activity-bar **Chat** sidebar (Copilot-like)
-- Streaming assistant responses over omp RPC
-- Collapsible **thinking** blocks
-- Live **tool call** cards
-- Attach current file / selection from the editor context menu
-- New chat, stop generation, restart session
-- Settings for model, thinking level, approval mode, auto-approve
-
-## Prerequisites
-
-1. Install Oh My Pi so `omp` is on your `PATH`
-2. Configure provider auth the same way you do for the terminal CLI
-3. VS Code `1.90+`
-
-## Develop
-
-```bash
-npm install
-npm run build
-```
-
-Then press **F5** (`Run Extension`) to open an Extension Development Host.
+OMPilot runs OMP in WSL when the workspace extension host runs there. Installing the VSIX in a Windows-only window does not make a Linux OMP executable available to that host. Existing OMP credentials and configuration remain in OMP's normal locations; no migration is required.
 
 ## Use
 
-1. Open the **OMP** icon in the Activity Bar
-2. Type a prompt and press **Enter**
-3. Optional:
-   - Right-click in the editor → **OMP: Attach Current File**
-   - Select code → **OMP: Send Selection to Chat**
-4. Use the view title buttons for **New Chat**, **Stop**, or **Restart Session**
+- **Main chat:** streaming replies, provider-exposed thinking, and expandable tool cards with complete arguments and output. Each tab has its own OMP process and session. History can resume workspace sessions; open session IDs restore after editor reloads. Right-click a tab to rename, view, copy, or export its conversation as plain text.
+- **Direction and stopping:** while the main agent is busy, **Enter** queues a follow-up and **Steer** sends an immediate direction. **Stop** aborts the current turn. Queued follow-ups are retained and run after OMP settles; remove them from the queue if you do not want them sent.
+- **Workers:** select a worker in the agent inspector to read its full conversation and raw messages. Running workers expose **Send direction** and **Cancel worker**. **Copy** and **Export** include the complete fetched transcript; Export opens JSON in an editor so you can save it.
+- **Advisors and prewalk:** inspect read-only advisor transcripts; use **Advisor on**, **Advisor off**, **Advisor status**, or **Arm prewalk**. Workflow notices show OMP's reported progress and model handoffs. These controls use your OMP workflow configuration.
+- **Questions and approvals:** OMP confirmation, choice, text, editor, and structured multi-question dialogs appear above the chat. Structured questions support multiple selections and custom answers. Approval behavior follows OMP settings and any explicit extension overrides.
+- **Editor context:** attach a selection, current file, files, folders, images, or captured terminal output. Use the editor or Explorer context menu, the paperclip, or `@` autocomplete. Choosing a dirty **Current file** or open editor from autocomplete attaches its current buffer text. Explicit dirty-file attachments do the same.
+- **Profiles and config:** the profile pill shows the active OMP profile. **OMP: Select Profile** switches the workspace and restores that profile's own tabs; it preserves the previous profile's history. **Config** opens profile, project, or launch-overlay YAML in the editor. **Apply config** restarts settled OMP sessions without restarting Cursor. Switching/applying is blocked while any tab is working.
+- **Changes:** **Review changes** opens Source Control for the working-tree diff. Tool file links open affected files and known line ranges; **OMP: Show File Touch Log** lists reported edit/write/delete paths.
 
-### Keyboard shortcuts
-
-| Action | macOS | Windows/Linux |
-|---|---|---|
-| Open chat | `Cmd+Shift+;` | `Ctrl+Shift+;` |
-| Send selection | `Cmd+Shift+'` | `Ctrl+Shift+'` |
+OMP filesystem tools operate on saved files. A dirty-buffer attachment supplies current editor text as context; it does not save the file or replace the contents on disk. Terminal attachments require editor shell integration and a captured command.
 
 ## Settings
 
-| Setting | Meaning |
-|---|---|
-| `ompChat.ompPath` | Path to `omp` (default: `omp`) |
-| `ompChat.model` | Model override (fuzzy match) |
-| `ompChat.thinking` | Thinking level |
-| `ompChat.approvalMode` | `always-ask` / `write` / `yolo` |
-| `ompChat.autoApprove` | Pass `--auto-approve` |
-| `ompChat.continueLastSession` | Restore all open omp chat tabs/sessions on start (default on; survives VS Code kills) |
-| `ompChat.autoTitle` | Let omp generate a short session title after the first message (default on; restart chats when toggling) |
-| `ompChat.extraArgs` | Extra CLI args |
-| `ompChat.showThinking` | Show/hide thinking blocks in UI |
-| `ompChat.logFileTouches` | Log edit/write/delete touched paths to **OMP File Touches** output channel |
+The existing `ompChat.*` setting names and `OMP:` commands are retained for compatibility.
 
-Quick error log: Command Palette → **OMP: Show Error Log** (also in the chat ⋯ menu). Entries persist across reloads and auto-clear after 7 days.
+| Setting | Behavior |
+| --- | --- |
+| `ompChat.profile` | Blank inherits launch arguments/environment; `default` forces the base profile; a name selects an isolated profile |
+| `ompChat.ompPath` | OMP executable; default `omp`, with common user installation paths checked |
+| `ompChat.model` | Optional model override; blank preserves OMP's configured choice |
+| `ompChat.thinking` | Optional thinking-level override; blank preserves OMP settings |
+| `ompChat.approvalMode` | Optional approval-mode override |
+| `ompChat.autoApprove` | Explicitly passes `--auto-approve` when enabled; default off |
+| `ompChat.continueLastSession` | Restore open session tabs; default on |
+| `ompChat.autoTitle` | Load the bundled session-title extension; default on |
+| `ompChat.extraArgs` | Additional arguments for the launched OMP process |
+| `ompChat.mode` | Agent / Ask / Plan interaction preference |
+| `ompChat.showThinking` | Show thinking blocks that the provider exposes |
+| `ompChat.logFileTouches` | Log reported file changes |
 
-## Architecture
+Agent / Ask / Plan are prompt hints, not an enforced tool permission boundary or security sandbox. Use OMP's approval configuration for tool approvals. Launch flags can override settings for this process; OMPilot does not rewrite your OMP configuration.
 
-```
-VS Code extension host
-  └─ ChatViewProvider (webview sidebar)
-       └─ SessionManager
-            └─ OmpRpcClient
-                 └─ spawn: omp --mode rpc --cwd <workspace>
-                      stdin/stdout: newline-delimited JSON
-```
+OMP 18.4.10 watches global, project, and `--config` YAML live. Advisor/prewalk settings and future role choices can react to saved changes. Invalid live edits retain the process's previous settings; repair them before restarting, because a fresh process may fail or use fallback settings. Check OMP warnings/logs. Runtime and launch overrides can mask file edits. A running main model is not replaced simply by changing a default model role; use the model picker. Profile/startup-loaded resources require restarting OMP, which **Apply config** does after work settles. Refreshing an already-running extension host's inherited environment can require reconnecting/reloading Cursor. See [profile/config behavior](docs/profiles.md).
 
-Prompt command:
+## Scope and verification
 
-```json
-{ "type": "prompt", "message": "..." }
-```
+OMPilot uses its own panel and OMP RPC process. Cursor's built-in Agent runtime is not exposed through a supported replacement interface used by this extension. Native Cursor conversation storage, checkpoints, per-turn revert, and its agent panel are separate systems. **Review changes** shows the current SCM diff, not native per-turn checkpoints.
 
-Stop command:
+Live checks against OMP 18.4.10 exercised RPC negotiation, worker transcripts and steering, cancellation acknowledgement and lifecycle, advisor sidecars, exact-session resume, structured questions, tool approval, and prewalk handoff. All 104 automated host/backend and webview DOM tests pass. The native Cursor window was not visually verified during this build. See [verification details](docs/verification.md) and [architecture notes](docs/architecture.md).
 
-```json
-{ "type": "abort" }
-```
+## Develop and package
 
-## Package
+Run these commands in WSL with Bun, a compatible Node.js runtime, and GitHub CLI installed. The RPC process fixtures use Linux executable scripts.
 
 ```bash
-npm run package
+gh repo clone javad-alipanah/ompilot
+cd ompilot
+bun install
+bun run compile
+bun run test
+bun run build
+bun run package
 ```
 
-This produces a `.vsix` you can install with:
+Packaging produces `ompilot-<version>.vsix`. Press **F5** in the repository to launch an Extension Development Host. Live smoke scripts require a working OMP installation and use provider requests; they are separate from `bun run test`.
 
-```bash
-code --install-extension oh-my-pi-chat-0.1.0.vsix
-```
+For connection failures, check the WSL host and executable path first, then run **OMP: Show Error Log**. Use **OMP: Restart Session** after changing runtime arguments. OMPilot keeps the upstream MIT license and attribution.
 
-## Notes / roadmap
-
-- Interactive omp questions (`extension_ui_request`: confirm / select / input / editor) render above the composer
-- Edit/write/delete file touches are logged to the **OMP File Touches** output channel (`OMP: Show File Touch Log`)
-- Tool auto-approval still uses `approvalMode` / `autoApprove` (separate from question cards)
-- Multi-workspace root picker and inline apply/diff are natural next steps
-- ACP (`omp acp`) is an alternative transport; this extension uses native `--mode rpc` for richer streaming events
-
-
-## Attachments
-
-- Click **📎** / **Files** / **Folder** in the composer
-- Type `@` in the composer to insert an inline file/folder mention
-- Paste an image from the clipboard into the input (shows as an inline chip)
-- Drag & drop files onto the chat panel
-- Right-click in Explorer → **OMP: Attach to Chat**
-- Attach recent terminal / CMD output via **📎 → Attach terminal output**, `/terminal`, `@terminal`, or the terminal context menu
-
-Paperclip/drag attachments are sent to `omp` as `@/absolute/path` mentions (images/files/folders). `@` autocomplete inserts an inline `@path` mention in the prompt. Code selections and terminal command output are inlined as fenced blocks.
-
-> Terminal capture uses VS Code **shell integration** (default for bash/zsh/pwsh/fish). Run a command in the integrated terminal first, then attach it.
+See [maintenance and CI setup](docs/development.md). The initial publishing token lacks GitHub's workflow scope, so CI is supplied as a template; the release checks were run locally.

@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noControlCharactersInRegex: ANSI escape and bell sequences must be stripped from captured terminal output.
 import * as vscode from "vscode";
 
 export interface CapturedTerminalCommand {

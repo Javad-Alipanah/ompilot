@@ -14,3 +14,10 @@ debug-*
 package-lock.json
 biome.json
 *.json.bak
+work/**
+tests/**
+scripts/**
+docs/**
+bun.lock
+coverage/**
+.github/**

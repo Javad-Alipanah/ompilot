@@ -1,0 +1,304 @@
+/* Agent inspector shares the main chat's Cursor/VS Code theme tokens. */
+#agent-inspector {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 52vh;
+  overflow: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.inspector-shell > summary,
+.inspector-roster-panel > summary,
+.inspector-raw > summary,
+.inspector-notice-history > summary {
+  cursor: pointer;
+}
+.inspector-summary {
+  padding: 9px 14px;
+  color: var(--text);
+  user-select: none;
+}
+.inspector-title {
+  font-weight: 600;
+  margin-right: 10px;
+}
+.inspector-count {
+  font-size: 11px;
+  color: var(--muted);
+}
+.inspector-body {
+  padding: 0 10px 10px;
+}
+.inspector-toolbar,
+.inspector-transcript-actions {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.inspector-toolbar {
+  padding-bottom: 8px;
+}
+.inspector-button {
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--chip);
+  white-space: nowrap;
+}
+.inspector-button:hover:not(:disabled) {
+  background: var(--hover);
+}
+#agent-inspector button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+#agent-inspector button:focus-visible,
+#agent-inspector summary:focus-visible,
+.inspector-transcript:focus-visible,
+.inspector-steer-input:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, var(--link));
+  outline-offset: 2px;
+}
+.inspector-layout {
+  display: grid;
+  grid-template-columns: minmax(120px, 29%) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+.inspector-roster-panel {
+  min-width: 0;
+}
+.inspector-subheading {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 5px 2px 7px;
+}
+.inspector-roster {
+  max-height: 260px;
+  overflow: auto;
+}
+.inspector-agent {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  width: 100%;
+  padding: 7px 6px 7px calc(6px + var(--agent-depth, 0) * 10px);
+  border-radius: 6px;
+  border: 1px solid transparent;
+  margin: 1px 0;
+}
+.inspector-agent:hover {
+  background: var(--hover);
+}
+.inspector-agent.selected {
+  background: var(--chip);
+  border-color: var(--border);
+}
+.inspector-agent-label {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.inspector-agent-detail {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.inspector-agent[data-status="running"] .inspector-agent-detail {
+  color: var(--link);
+}
+.inspector-agent[data-status="error"] .inspector-agent-detail {
+  color: var(--danger);
+}
+.inspector-agent[data-status="completed"] .inspector-agent-detail {
+  color: var(--ok);
+}
+.inspector-viewer {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.inspector-viewer-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.inspector-heading-text {
+  min-width: 0;
+}
+.inspector-agent-name {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.inspector-agent-meta {
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.inspector-transcript {
+  max-height: 250px;
+  overflow: auto;
+  padding: 8px;
+  overscroll-behavior: contain;
+}
+.inspector-message {
+  margin-bottom: 14px;
+}
+.inspector-message:last-child {
+  margin-bottom: 0;
+}
+.inspector-message-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+.inspector-message-time {
+  margin-left: auto;
+}
+.inspector-message-text {
+  font-size: 12px;
+}
+.inspector-message-text p:first-child {
+  margin-top: 0;
+}
+.inspector-message-text p:last-child {
+  margin-bottom: 5px;
+}
+.inspector-raw {
+  margin: 5px 0;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.inspector-raw > summary {
+  padding: 5px 6px;
+  color: var(--muted);
+}
+.inspector-raw pre {
+  padding: 7px;
+  margin: 0;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.inspector-tool > strong {
+  font-size: 11px;
+  font-weight: 500;
+}
+.inspector-empty,
+.inspector-readonly {
+  margin: 4px 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.inspector-controls {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+}
+.inspector-controls:empty {
+  display: none;
+}
+.inspector-steer-label {
+  width: 100%;
+  font-size: 11px;
+  color: var(--muted);
+}
+.inspector-steer-input {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  max-height: 160px;
+  resize: vertical;
+  padding: 7px 8px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.inspector-button[data-action="cancel"] {
+  color: var(--danger);
+}
+.inspector-error {
+  padding: 8px;
+  margin-bottom: 8px;
+  color: var(--danger);
+  background: var(--chip);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.inspector-error-text {
+  margin-right: 8px;
+}
+.inspector-notices {
+  padding: 7px 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+}
+.inspector-notice-latest {
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+}
+.inspector-notice-history {
+  color: var(--muted);
+}
+.inspector-notice-history ol {
+  margin: 7px 0 0;
+  padding-left: 20px;
+}
+.inspector-notice-history li {
+  margin-bottom: 5px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 500px) {
+  .inspector-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .inspector-roster {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    max-height: 145px;
+  }
+  .inspector-agent {
+    width: calc(50% - 2px);
+  }
+  .inspector-viewer-heading {
+    flex-wrap: wrap;
+  }
+  .inspector-transcript {
+    max-height: 220px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #agent-inspector * {
+    scroll-behavior: auto;
+  }
+}

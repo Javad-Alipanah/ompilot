@@ -183,14 +183,19 @@ async function listJsonlFiles(dir: string): Promise<string[]> {
 /**
  * List omp session history for a workspace cwd (newest first).
  */
-export async function listOmpSessions(cwd: string): Promise<OmpHistorySession[]> {
-  const sessionsRoot = path.join(agentRoot(), "sessions");
+export async function listOmpSessions(
+  cwd: string,
+  sessionsRoot = path.join(agentRoot(), "sessions"),
+  directOnly = false,
+): Promise<OmpHistorySession[]> {
   const preferred = path.join(sessionsRoot, encodeSessionDirName(cwd));
-  const dirs = new Set<string>([preferred]);
+  const dirs = new Set<string>(directOnly ? [sessionsRoot] : [sessionsRoot, preferred]);
 
   // Also scan sibling dirs in case encoding differs; filter by session cwd.
   try {
-    const entries = await fs.promises.readdir(sessionsRoot, { withFileTypes: true });
+    const entries = directOnly
+      ? []
+      : await fs.promises.readdir(sessionsRoot, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory()) {
         dirs.add(path.join(sessionsRoot, entry.name));

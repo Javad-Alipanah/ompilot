@@ -3,9 +3,11 @@ import * as vscode from "vscode";
 import { cleanChatTitle, titleFromUserText } from "./chatTitle";
 import { type SessionIdStore, SessionManager } from "./sessionManager";
 import type {
+  AskAnswer,
   Attachment,
   ChatMessage,
   ContextUsage,
+  OmpClientOptions,
   SessionModelInfo,
   SessionStatus,
   UiQuestion,
@@ -54,15 +56,22 @@ export class TabManager {
   private readonly tabTitles = new Map<string, string>();
   /** Tabs whose title was set by the user — do not overwrite with agent titles. */
   private readonly manualTitles = new Set<string>();
+  private readonly closingSessions = new Set<Promise<void>>();
   private order: string[] = [];
   private activeId = "";
+  private disposed = false;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChange = this._onDidChange.event;
 
   constructor(
     private readonly getWorkspaceCwd: () => string,
-    private readonly openSessionsStore?: OpenSessionsStore,
+    private openSessionsStore?: OpenSessionsStore,
+    private runtimeOptions: Partial<OmpClientOptions> = {},
   ) {
+    this.restoreTabs();
+  }
+
+  private restoreTabs(): void {
     const continueEnabled = vscode.workspace
       .getConfiguration("ompChat")
       .get<boolean>("continueLastSession", true);
@@ -82,6 +91,37 @@ export class TabManager {
     }
 
     this.createTab(true);
+  }
+
+  getRuntimeOptions(): Partial<OmpClientOptions> {
+    return this.runtimeOptions;
+  }
+
+  async switchRuntime(store: OpenSessionsStore, options: Partial<OmpClientOptions>): Promise<void> {
+    if (this.getTabs().some((tab) => tab.busy))
+      throw new Error("Stop active OMP work or wait for it to settle before switching profiles.");
+    this.persistOpenSessions();
+    const previous = [...this.tabs.values()];
+    this.tabs.clear();
+    this.tabSessionIds.clear();
+    this.tabTitles.clear();
+    this.manualTitles.clear();
+    this.order = [];
+    this.activeId = "";
+    previous.forEach((tab) => {
+      tab.subscription.dispose();
+    });
+    const closing = Promise.all(previous.map((tab) => tab.session.dispose())).then(() => {});
+    this.closingSessions.add(closing);
+    this.openSessionsStore = store;
+    this.runtimeOptions = options;
+    this.restoreTabs();
+    try {
+      await closing;
+    } finally {
+      this.closingSessions.delete(closing);
+    }
+    if (!this.disposed) await this.ensureStarted();
   }
 
   private notify(): void {
@@ -218,6 +258,7 @@ export class TabManager {
   }
 
   createTab(activate = true, resumeSessionId?: string, title?: string): string {
+    if (this.disposed) throw new Error("OMP workspace has been closed.");
     const id = randomUUID();
     if (resumeSessionId?.trim()) {
       this.tabSessionIds.set(id, resumeSessionId.trim());
@@ -226,7 +267,11 @@ export class TabManager {
     if (initialTitle !== "New chat") {
       this.tabTitles.set(id, initialTitle);
     }
-    const session = new SessionManager(this.getWorkspaceCwd, this.makeSessionStore(id));
+    const session = new SessionManager(
+      this.getWorkspaceCwd,
+      this.makeSessionStore(id),
+      this.runtimeOptions,
+    );
     const subscription = session.onDidChange(() => {
       const tab = this.tabs.get(id);
       if (tab) {
@@ -267,7 +312,6 @@ export class TabManager {
     }
 
     tab.subscription.dispose();
-    await tab.session.dispose();
     this.tabs.delete(id);
     this.tabSessionIds.delete(id);
     this.tabTitles.delete(id);
@@ -281,17 +325,26 @@ export class TabManager {
         .get(nextId)
         ?.session.ensureStarted({ continueLastSession: false, resumeSessionId: undefined })
         .catch(() => undefined);
-      return;
+    } else {
+      if (this.activeId === id) {
+        this.activeId = this.order[this.order.length - 1] || this.order[0];
+        void this.active()
+          .ensureStarted()
+          .catch(() => undefined);
+      }
+      this.persistOpenSessions();
+      this.notify();
     }
 
-    if (this.activeId === id) {
-      this.activeId = this.order[this.order.length - 1] || this.order[0];
-      void this.active()
-        .ensureStarted()
-        .catch(() => undefined);
+    // Stop routing UI messages to the closing tab before waiting for OMP EOF.
+    // Keep its shutdown in the extension's lifetime even after removing the tab.
+    const closing = tab.session.dispose();
+    this.closingSessions.add(closing);
+    try {
+      await closing;
+    } finally {
+      this.closingSessions.delete(closing);
     }
-    this.persistOpenSessions();
-    this.notify();
   }
 
   async newChat(): Promise<void> {
@@ -421,7 +474,7 @@ export class TabManager {
 
   answerUiQuestion(
     id: string,
-    answer: { confirmed?: boolean; value?: string; cancelled?: boolean },
+    answer: { confirmed?: boolean; value?: string; cancelled?: boolean; answers?: AskAnswer[] },
   ): void {
     this.active().answerUiQuestion(id, answer);
   }
@@ -443,6 +496,7 @@ export class TabManager {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     this.persistOpenSessions();
     const all = [...this.tabs.values()];
     this.tabs.clear();
@@ -451,10 +505,13 @@ export class TabManager {
     this.manualTitles.clear();
     this.order = [];
     this.activeId = "";
-    for (const tab of all) {
-      tab.subscription.dispose();
-      await tab.session.dispose();
-    }
+    await Promise.all([
+      ...this.closingSessions,
+      ...all.map(async (tab) => {
+        tab.subscription.dispose();
+        await tab.session.dispose();
+      }),
+    ]);
     this._onDidChange.dispose();
   }
 }
