@@ -4,13 +4,13 @@
 
 Use Bun 1.3.14 and Node 24 in WSL. Install with `bun install --frozen-lockfile`, then run `bun run compile`, `bun run test`, and `bun run package`. Normal tests use process fixtures and do not call providers. Live smoke tests are opt-in.
 
-The initial release passed 104 automated checks and the real-OMP checks listed in [verification](verification.md). Cursor desktop interaction still needs manual verification in a WSL window.
+Version 0.1.1 passes 130 automated checks and the real-OMP checks listed in [verification](verification.md). Cursor desktop interaction still needs manual verification in a WSL window.
 
-## Enable GitHub Actions
+## GitHub Actions
 
-The publishing account's existing GitHub CLI token has repository access but lacks `workflow` scope. GitHub rejected a push containing a workflow. The tested workflow is preserved as `docs/ci-workflow.yml`; no automated CI run is active yet.
+The workflow is enabled at `.github/workflows/ci.yml` for pushes and pull requests. The publishing account's GitHub CLI authorization includes the required `workflow` scope. `docs/ci-workflow.yml` remains a template for other forks.
 
-If you want to enable it, run the following from this checkout in WSL. The authentication refresh needs you to complete GitHub's browser authorization.
+If another fork needs authorization and workflow setup, run the following from that checkout in WSL. The authentication refresh needs browser authorization.
 
 ```bash
 gh auth refresh --hostname github.com --scopes workflow

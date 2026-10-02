@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { cleanChatTitle } from "./chatTitle";
+import type { OmpSlashCommand } from "./commandCatalog";
 import { logError, logWarn } from "./errorLog";
 import { InspectionService } from "./inspectionService";
 import type { InspectionSnapshot } from "./inspectionTypes";
@@ -244,6 +245,17 @@ export class SessionManager {
       contextWindow: Number(model.contextWindow),
       reasoning: Boolean(model.reasoning),
     }));
+  }
+
+  async getAvailableCommands(): Promise<OmpSlashCommand[]> {
+    await this.ensureStarted();
+    const client = this.client;
+    if (!client?.isReady) throw new Error("OMP is not connected while listing commands.");
+    const commands = await client.getCommands();
+    if (this.disposed || client !== this.client) {
+      throw new Error("OMP session changed while listing commands.");
+    }
+    return commands;
   }
 
   getSessionId(): string | undefined {

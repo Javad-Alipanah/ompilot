@@ -123,6 +123,9 @@
     { id: "history", label: "/history", detail: "Switch chat tabs" },
     { id: "help", label: "/help", detail: "List available commands" },
   ];
+  let ompCommands = [];
+  let commandCatalogLoading = false;
+  let commandCatalogError = "";
 
   const suggest = {
     open: false,
@@ -2350,7 +2353,7 @@
     if (node.nodeType === Node.TEXT_NODE) return (node.nodeValue || "").length;
     if (node.nodeType !== Node.ELEMENT_NODE) return 0;
     if (node.classList && node.classList.contains("image-chip")) {
-      return 1;
+      return 0;
     }
     if (node.classList && node.classList.contains("mention-chip")) {
       const path = node.getAttribute("data-mention-path") || "";
@@ -2369,12 +2372,30 @@
     if (!sel || sel.rangeCount === 0 || !inputEl) return getComposerText().length;
     const range = sel.getRangeAt(0);
     if (!inputEl.contains(range.endContainer)) return getComposerText().length;
-    const pre = range.cloneRange();
-    pre.selectNodeContents(inputEl);
-    pre.setEnd(range.endContainer, range.endOffset);
-    const holder = document.createElement("div");
-    holder.appendChild(pre.cloneContents());
-    return composerPlainLength(holder);
+    let offset = 0;
+    function walk(node) {
+      if (node === range.endContainer) {
+        if (node.nodeType === Node.TEXT_NODE) offset += range.endOffset;
+        else
+          for (let i = 0; i < range.endOffset; i++)
+            offset += composerPlainLength(node.childNodes[i]);
+        return true;
+      }
+      if (node.nodeType === Node.TEXT_NODE) {
+        offset += (node.nodeValue || "").length;
+        return false;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return false;
+      if (node.tagName === "BR" || node.classList.contains("mention-chip")) {
+        offset += composerPlainLength(node);
+        return false;
+      }
+      for (const child of node.childNodes) if (walk(child)) return true;
+      if (node !== inputEl && (node.tagName === "DIV" || node.tagName === "P")) offset++;
+      return false;
+    }
+    walk(inputEl);
+    return Math.min(offset, getComposerText().length);
   }
 
   function setComposerCaretOffset(offset) {
@@ -2581,20 +2602,22 @@
     suggest.kind = null;
     suggest.items = [];
     suggest.active = 0;
+    commandCatalogLoading = false;
+    commandCatalogError = "";
     if (suggestEl) suggestEl.hidden = true;
     if (suggestListEl) suggestListEl.innerHTML = "";
   }
 
   function renderSuggest() {
     if (!suggestEl || !suggestListEl || !suggestHeaderEl) return;
-    if (!suggest.open || suggest.items.length === 0) {
+    if (!suggest.open) {
       suggestEl.hidden = true;
       return;
     }
     closeQueueMenu();
     suggestEl.hidden = false;
     suggestHeaderEl.textContent =
-      suggest.kind === "command" ? "Commands" : "Mention file or folder";
+      suggest.kind === "command" ? "Commands & skills" : "Mention file or folder";
     suggestListEl.innerHTML = suggest.items
       .map((item, index) => {
         const active = index === suggest.active ? " active" : "";
@@ -2627,6 +2650,21 @@
         );
       })
       .join("");
+    if (suggest.kind === "command") {
+      const detail =
+        commandCatalogError ||
+        (commandCatalogLoading
+          ? "Loading OMP commands and skills…"
+          : suggest.items.length
+            ? ""
+            : "No matching commands or skills.");
+      if (detail) {
+        const note = document.createElement("div");
+        note.className = "suggest-empty";
+        note.textContent = detail;
+        suggestListEl.appendChild(note);
+      }
+    }
     const activeEl = suggestListEl.querySelector(".suggest-item.active");
     if (activeEl && activeEl.scrollIntoView) {
       activeEl.scrollIntoView({ block: "nearest" });
@@ -2638,7 +2676,9 @@
     const start = suggest.start;
     const end = suggest.end;
     const next = value.slice(0, start) + replacement + value.slice(end);
+    const imageChips = Array.from(inputEl.querySelectorAll(".image-chip"));
     setComposerText(next);
+    for (const chip of imageChips) inputEl.append(chip, document.createTextNode(" "));
     const caret = start + String(replacement || "").length;
     setComposerCaretOffset(caret);
     autosize();
@@ -2678,27 +2718,76 @@
       return;
     }
     if (suggest.kind === "command") {
-      replaceTriggerRange("");
+      if (item.localCommand) {
+        replaceTriggerRange("");
+        closeSuggest();
+        vscode.postMessage({
+          type: "runSlashCommand",
+          command: item.localCommand,
+          tabId: state.activeTabId,
+        });
+        inputEl.focus();
+        return;
+      }
+      const suffix = getComposerText().slice(suggest.end);
+      replaceTriggerRange("/" + item.id + (/^\s/.test(suffix) ? "" : " "));
       closeSuggest();
-      vscode.postMessage({ type: "runSlashCommand", command: item.id });
       inputEl.focus();
     }
   }
 
   function updateCommandSuggest(query) {
     const q = String(query || "").toLowerCase();
-    const items = SLASH_COMMANDS.filter((cmd) => {
+    const sources = {
+      builtin: "OMP command",
+      skill: "Skill",
+      extension: "Extension command",
+      custom: "Custom command",
+      mcp_prompt: "MCP prompt",
+      file: "Prompt template",
+      prompt: "Prompt template",
+    };
+    const runtime = ompCommands.map((cmd) => ({
+      id: cmd.name,
+      label: "/" + cmd.name,
+      aliases: cmd.aliases || [],
+      detail: [sources[cmd.source] || "OMP command", cmd.description, cmd.input && cmd.input.hint]
+        .filter(Boolean)
+        .join(" · "),
+      kind: "command",
+    }));
+    const local = SLASH_COMMANDS.map((cmd) => ({
+      id: "ide:" + cmd.id,
+      label: "/ide:" + cmd.id,
+      aliases: [cmd.id],
+      localCommand: cmd.id,
+      detail: "IDE shortcut · " + cmd.detail,
+      kind: "command",
+    }));
+    const items = runtime.concat(local).filter((cmd) => {
       if (!q) return true;
       return (
-        cmd.id.indexOf(q) === 0 ||
-        cmd.label.indexOf(q) >= 0 ||
+        cmd.id.toLowerCase().includes(q) ||
+        cmd.aliases.some((alias) => alias.toLowerCase().includes(q)) ||
         (cmd.detail && cmd.detail.toLowerCase().indexOf(q) >= 0)
       );
-    }).map((cmd) => ({ id: cmd.id, label: cmd.label, detail: cmd.detail, kind: "command" }));
+    });
     suggest.items = items;
     suggest.active = 0;
-    suggest.open = items.length > 0;
+    suggest.open = true;
     renderSuggest();
+  }
+
+  function requestCommandSuggest() {
+    ompCommands = [];
+    commandCatalogError = "";
+    commandCatalogLoading = true;
+    suggest.requestId++;
+    vscode.postMessage({
+      type: "getSlashCommands",
+      requestId: suggest.requestId,
+      tabId: state.activeTabId,
+    });
   }
 
   function requestFileSuggest(query) {
@@ -2716,6 +2805,7 @@
       closeSuggest();
       return;
     }
+    const enteringCommands = trigger.kind === "command" && suggest.kind !== "command";
     if (suggest.kind !== trigger.kind) {
       suggest.items = [];
       suggest.active = 0;
@@ -2725,6 +2815,7 @@
     suggest.end = trigger.end;
     suggest.query = trigger.query;
     if (trigger.kind === "command") {
+      if (enteringCommands) requestCommandSuggest();
       updateCommandSuggest(trigger.query);
       return;
     }
@@ -2773,8 +2864,7 @@
       return;
     }
     // Keep only one composer popover open at a time.
-    if (suggestEl) suggestEl.hidden = true;
-    if (typeof suggest !== "undefined") suggest.open = false;
+    closeSuggest();
     queueMenuOpen = true;
     queueMenuEl.hidden = false;
     queueToggleEl.setAttribute("aria-expanded", "true");
@@ -2885,6 +2975,7 @@
   function send() {
     const text = getComposerText();
     if (text.trim() === "" && state.attachments.length === 0) return;
+    closeSuggest();
     stickToBottom = true;
     const busy = state.status.state === "busy";
     if (text.trim() || state.attachments.length) {
@@ -3088,6 +3179,21 @@
     );
 
   inputEl.addEventListener("keydown", (e) => {
+    if (suggest.open && e.key === "Escape") {
+      e.preventDefault();
+      closeSuggest();
+      return;
+    }
+    if (
+      suggest.open &&
+      suggest.kind === "command" &&
+      commandCatalogLoading &&
+      !suggest.query.startsWith("ide:") &&
+      (e.key === "Enter" || e.key === "Tab")
+    ) {
+      e.preventDefault();
+      return;
+    }
     if (suggest.open && suggest.items.length) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -3104,11 +3210,6 @@
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
         applySuggestItem(suggest.items[suggest.active]);
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeSuggest();
         return;
       }
     }
@@ -3548,6 +3649,7 @@
     }
     if (msg.type === "ready") {
       const nextTabId = msg.activeTabId || "";
+      if (nextTabId !== state.activeTabId || msg.status.state === "starting") closeSuggest();
       switchComposerDraft(nextTabId);
       if (nextTabId !== activeTabIdForScroll) {
         stickToBottom = true;
@@ -3571,6 +3673,7 @@
       return;
     }
     if (msg.type === "status") {
+      if (msg.status.state === "starting") closeSuggest();
       state.status = msg.status;
       render();
       return;
@@ -3626,6 +3729,7 @@
     if (msg.type === "tabs") {
       state.tabs = msg.tabs || [];
       const nextTabId = msg.activeTabId || state.activeTabId || "";
+      if (nextTabId !== state.activeTabId) closeSuggest();
       switchComposerDraft(nextTabId);
       if (nextTabId !== activeTabIdForScroll) {
         stickToBottom = true;
@@ -3654,6 +3758,20 @@
       suggest.active = 0;
       suggest.open = suggest.items.length > 0;
       renderSuggest();
+      return;
+    }
+    if (msg.type === "slashCommands") {
+      if (
+        msg.requestId !== suggest.requestId ||
+        msg.tabId !== state.activeTabId ||
+        suggest.kind !== "command" ||
+        !suggest.open
+      )
+        return;
+      ompCommands = (msg.commands || []).filter((cmd) => cmd && typeof cmd.name === "string");
+      commandCatalogLoading = false;
+      commandCatalogError = msg.error ? String(msg.error) : "";
+      updateCommandSuggest(suggest.query);
       return;
     }
     if (msg.type === "error") {

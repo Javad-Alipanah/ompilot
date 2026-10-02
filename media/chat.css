@@ -194,11 +194,11 @@ button {
   gap: 10px;
   margin-bottom: 18px;
 }
-.sparkle {
-  width: 28px;
-  height: 28px;
-  color: #d7d7d7;
-  opacity: 0.9;
+.greeting-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  object-fit: contain;
 }
 .greeting h1 {
   margin: 0;
@@ -1506,6 +1506,11 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.suggest-empty {
+  padding: 8px;
+  font-size: 11px;
+  color: var(--muted);
 }
 
 /* Cursor-style queued follow-ups (drop-up above composer) */

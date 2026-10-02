@@ -1,5 +1,7 @@
 # OMPilot
 
+<p align="center"><img src="media/ompilot-icon.png" width="160" height="160" alt="OMPilot: pi, cursor and blue ribbon" /></p>
+
 [Oh My Pi](https://omp.sh/) inside Cursor, using your existing OMP runtime and provider setup. OMPilot adds a separate chat panel with session tabs, worker controls, advisor transcripts, and prewalk notices.
 
 Repository: [javad-alipanah/ompilot](https://github.com/javad-alipanah/ompilot). Forked from [Chakyiu/omp-vscode](https://github.com/Chakyiu/omp-vscode), under the [MIT license](LICENSE).
@@ -17,6 +19,7 @@ OMPilot runs OMP in WSL when the workspace extension host runs there. Installing
 ## Use
 
 - **Main chat:** streaming replies, provider-exposed thinking, and expandable tool cards with complete arguments and output. Each tab has its own OMP process and session. History can resume workspace sessions; open session IDs restore after editor reloads. Right-click a tab to rename, view, copy, or export its conversation as plain text.
+- **Slash completion:** type `/` at the start of the composer to browse the active OMP process's commands, skills, extensions and prompt templates. Filter by name or description, then use arrows and Enter/Tab or click to complete. OMP selections insert their exact invocation; add task arguments and press Enter again to send/queue. Skills retain qualified names such as `/skill:namespace/name`. IDE shortcuts are explicitly named `/ide:new`, `/ide:model`, etc.; selecting those performs the corresponding editor action. Discovery refreshes whenever the popup is opened and follows the selected profile.
 - **Direction and stopping:** while the main agent is busy, **Enter** queues a follow-up and **Steer** sends an immediate direction. **Stop** aborts the current turn. Queued follow-ups are retained and run after OMP settles; remove them from the queue if you do not want them sent.
 - **Workers:** select a worker in the agent inspector to read its full conversation and raw messages. Running workers expose **Send direction** and **Cancel worker**. **Copy** and **Export** include the complete fetched transcript; Export opens JSON in an editor so you can save it.
 - **Advisors and prewalk:** inspect read-only advisor transcripts; use **Advisor on**, **Advisor off**, **Advisor status**, or **Arm prewalk**. Workflow notices show OMP's reported progress and model handoffs. These controls use your OMP workflow configuration.
@@ -54,7 +57,7 @@ OMP 18.4.10 watches global, project, and `--config` YAML live. Advisor/prewalk s
 
 OMPilot uses its own panel and OMP RPC process. Cursor's built-in Agent runtime is not exposed through a supported replacement interface used by this extension. Native Cursor conversation storage, checkpoints, per-turn revert, and its agent panel are separate systems. **Review changes** shows the current SCM diff, not native per-turn checkpoints.
 
-Live checks against OMP 18.4.10 exercised RPC negotiation, worker transcripts and steering, cancellation acknowledgement and lifecycle, advisor sidecars, exact-session resume, structured questions, tool approval, and prewalk handoff. All 104 automated host/backend and webview DOM tests pass. The native Cursor window was not visually verified during this build. See [verification details](docs/verification.md) and [architecture notes](docs/architecture.md).
+Live checks against OMP 18.4.10 exercised RPC negotiation, command/skill discovery, worker transcripts and steering, cancellation acknowledgement and lifecycle, advisor sidecars, exact-session resume, structured questions, tool approval, and prewalk handoff. All 130 automated host/backend and webview DOM tests pass. The native Cursor window was not visually verified during this build. See [verification details](docs/verification.md) and [architecture notes](docs/architecture.md).
 
 ## Develop and package
 
@@ -74,4 +77,4 @@ Packaging produces `ompilot-<version>.vsix`. Press **F5** in the repository to l
 
 For connection failures, check the WSL host and executable path first, then run **OMP: Show Error Log**. Use **OMP: Restart Session** after changing runtime arguments. OMPilot keeps the upstream MIT license and attribution.
 
-See [maintenance and CI setup](docs/development.md). The initial publishing token lacks GitHub's workflow scope, so CI is supplied as a template; the release checks were run locally.
+See [maintenance and CI setup](docs/development.md). GitHub Actions verifies pushes and pull requests and uploads a packaged VSIX.

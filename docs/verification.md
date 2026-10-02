@@ -1,15 +1,15 @@
-# Verification for 0.1.0
+# Verification for 0.1.1
 
 Checked on 2026-10-02 in Ubuntu WSL with OMP 18.4.10, Bun 1.3.14 and Node 24. The Windows editor is Cursor 3.22.12.
 
 ## Automated checks
 
 - TypeScript compilation: passed.
-- 78 backend/host tests and 26 webview DOM tests: passed (104 total).
+- 92 backend/host tests and 38 webview DOM tests: passed (130 total).
 - Biome error-level check and Git whitespace check: passed.
 - Frozen dependency installation and production VSIX packaging: passed locally.
 
-The GitHub CLI token used to publish this fork lacks the `workflow` scope. CI is delivered as [a workflow template](ci-workflow.yml), with [enablement instructions](development.md), rather than an active Actions workflow.
+GitHub Actions is enabled for pushes and pull requests. The workflow performs frozen installation, compilation, tests and VSIX packaging without OMP credentials or provider calls.
 
 The suite covers RPC framing and process disposal, asynchronous settling and queued prompts, streamed/restored thinking, complete tool outputs, worker/advisor transcript restoration, nested owned-path validation, profile resolution and remembered overrides, custom session directories, editor buffers, questions, stale events and per-tab UI drafts.
 
@@ -21,6 +21,7 @@ Disposable workspaces and harness-owned sessions exercised the actual installed 
 | --- | --- |
 | RPC startup | Version-2 negotiation and request correlation worked |
 | Profiles | Three existing profiles launched with their configured models and separate session storage; no prompts were sent for this check |
+| Commands/skills | Actual `get_available_commands` returned 167 metadata entries, including 111 skills; the delivered client preserved exact qualified names without sending a model prompt |
 | Workers | Worker launch and immediate steering worked; steering appeared in the saved conversation |
 | Full child history | Six conversational messages and fifteen entries returned; the next cursor read was empty |
 | Resume | Exact parent session resumed; delivered inspector restored child and advisor sidecars |

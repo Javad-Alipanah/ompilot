@@ -158,6 +158,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if ("tabId" in msg && msg.tabId !== this.sessions.getActiveId()) return;
     const session = this.sessions.active();
     switch (msg.type) {
+      case "getSlashCommands": {
+        const profileKey = this.profileContext?.().key;
+        const stillCurrent = () =>
+          this.sessions.getActiveId() === msg.tabId &&
+          this.sessions.active() === session &&
+          this.profileContext?.().key === profileKey;
+        try {
+          const commands = await session.getAvailableCommands();
+          if (stillCurrent())
+            this.post({
+              type: "slashCommands",
+              tabId: msg.tabId,
+              requestId: msg.requestId,
+              commands,
+            });
+        } catch (error) {
+          if (stillCurrent())
+            this.post({
+              type: "slashCommands",
+              tabId: msg.tabId,
+              requestId: msg.requestId,
+              commands: [],
+              error: error instanceof Error ? error.message : String(error),
+            });
+        }
+        break;
+      }
       case "pickProfile":
         await vscode.commands.executeCommand("ompChat.pickProfile");
         break;
@@ -488,6 +515,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private getHtml(webview: vscode.Webview): string {
+    const iconUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "ompilot-icon.png"),
+    );
     const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "media", "chat.css"),
     );
@@ -551,9 +581,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     <section id="empty" class="empty visible">
       <div class="greeting">
-        <svg class="sparkle" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M6.5 8.25h11M9 8.25V16.4c0 .75-.3 1.15-.95 1.15-.3 0-.58-.08-.82-.22M15 8.25V16.4c0 .75.3 1.15.95 1.15.3 0 .58-.08.82-.22" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
+        <img class="greeting-icon" src="${iconUri}" alt="OMPilot" width="64" height="64" />
         <h1 id="greetingTitle">How can I help you?</h1>
       </div>
       <div class="suggestions">
@@ -611,7 +639,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           <div id="suggestList" class="suggest-list" role="listbox"></div>
         </div>
         <div id="attachments" class="attachments"></div>
-        <div id="input" class="composer-input" role="textbox" aria-multiline="true" contenteditable="true" data-placeholder="Plan, @ for context, / for commands — Enter queues while generating"></div>
+        <div id="input" class="composer-input" role="textbox" aria-multiline="true" contenteditable="true" data-placeholder="Plan, @ for context, / for commands and skills — Enter queues while generating"></div>
         <div class="composer-actions">
           <div class="left-actions">
             <button id="modelBtn" class="pill" title="Select model">
@@ -1195,7 +1223,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         break;
       case "help":
         vscode.window.showInformationMessage(
-          "Commands: /new /stop /restart /model /mode /attach /folder /terminal /usage /history /help — Files/folders: type @ to mention inline; @terminal attaches CMD output",
+          "Type / for the active OMP profile's commands, skills and prompt templates. IDE shortcuts use /ide:new /ide:stop /ide:restart /ide:model /ide:mode /ide:attach /ide:folder /ide:terminal /ide:usage /ide:history /ide:help. Type @ for editor context.",
         );
         break;
       default:

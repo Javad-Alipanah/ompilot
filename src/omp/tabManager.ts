@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import * as vscode from "vscode";
 import { cleanChatTitle, titleFromUserText } from "./chatTitle";
+import type { OmpSlashCommand } from "./commandCatalog";
 import { type SessionIdStore, SessionManager } from "./sessionManager";
 import type {
   AskAnswer,
@@ -383,6 +384,10 @@ export class TabManager {
 
   async send(text: string): Promise<void> {
     await this.active().send(text);
+  }
+
+  async getAvailableCommands(): Promise<OmpSlashCommand[]> {
+    return this.active().getAvailableCommands();
   }
 
   recallQueued(

@@ -1,3 +1,4 @@
+import type { OmpSlashCommand } from "./commandCatalog";
 import type { InspectionSnapshot } from "./inspectionTypes";
 
 export type ChatRole = "user" | "assistant" | "system";
@@ -144,6 +145,13 @@ export interface UiQuestion {
 }
 
 export type HostToWebview =
+  | {
+      type: "slashCommands";
+      tabId: string;
+      requestId: number;
+      commands: OmpSlashCommand[];
+      error?: string;
+    }
   | { type: "steeringAccepted"; tabId: string; message: string }
   | { type: "inspection"; snapshot: InspectionSnapshot & { tabId: string } }
   | {
@@ -184,6 +192,7 @@ export type HostToWebview =
   | { type: "inlineImage"; clientId?: string; attachment: Attachment };
 
 export type WebviewToHost =
+  | { type: "getSlashCommands"; tabId: string; requestId: number }
   | { type: "pickProfile" }
   | { type: "openOmpConfig" }
   | { type: "applyOmpConfig" }
@@ -235,7 +244,7 @@ export type WebviewToHost =
   | { type: "openFile"; path: string; line?: number; endLine?: number }
   | { type: "openExternal"; url: string }
   | { type: "searchFiles"; query: string; requestId: number }
-  | { type: "runSlashCommand"; command: string }
+  | { type: "runSlashCommand"; command: string; tabId: string }
   | {
       type: "answerUiQuestion";
       id: string;

@@ -1,6 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "child_process";
 import { EventEmitter } from "events";
 import * as readline from "readline";
+import { normalizeCommandCatalog, type OmpSlashCommand } from "./commandCatalog";
 import { RpcFrameDecoder } from "./rpcFrames";
 import type { AssistantMessageEvent, OmpClientOptions, OmpRpcEvent } from "./types";
 
@@ -322,6 +323,23 @@ export class OmpRpcClient extends EventEmitter {
       throw new Error(String(response.error ?? "get_state failed"));
     }
     return (response.data as Record<string, unknown>) ?? {};
+  }
+
+  /** Query the running process so profile settings and skill discovery stay authoritative. */
+  async getCommands(): Promise<OmpSlashCommand[]> {
+    let response = await this.request({ type: "get_available_commands" });
+    if (
+      response.success === false &&
+      /unknown command|unsupported command/i.test(String(response.error))
+    ) {
+      // Older Pi-compatible runtimes expose a smaller catalog through this name.
+      response = await this.request({ type: "get_commands" });
+    }
+    if (response.success === false) {
+      throw new Error(String(response.error ?? "Could not list OMP commands"));
+    }
+    const data = response.data as Record<string, unknown> | undefined;
+    return normalizeCommandCatalog(data?.commands);
   }
 
   /**

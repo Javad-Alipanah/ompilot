@@ -25,6 +25,50 @@ async function fixture(body: string) {
 }
 
 describe("OMP RPC process transport", () => {
+  test("reads the active runtime command catalog with exact qualified skill names", async () => {
+    const client = await fixture(`if(cmd.type==='get_available_commands')output({type:'response',id:cmd.id,command:cmd.type,success:true,data:{commands:[{name:'model',description:'Choose model',source:'builtin',aliases:['models'],input:{hint:'[model]'},subcommands:[{name:'status',description:'Show model',usage:'status'}]},{name:'skill:mattpocock-skills/code-review',description:'Review a change',source:'skill',path:'/private/skill.md',prompt:'PRIVATE BODY'},{name:'review',description:'Extension review',source:'extension'}]}});else output({type:'response',id:cmd.id,command:cmd.type,success:false,error:'Unexpected command'});`);
+    await client.start();
+    expect(typeof (client as any).getCommands).toBe("function");
+    const commands = await client.getCommands();
+    expect(commands).toEqual([
+      { name: "model", description: "Choose model", source: "builtin", aliases: ["models"], input: { hint: "[model]" }, subcommands: [{ name: "status", description: "Show model", usage: "status" }] },
+      { name: "skill:mattpocock-skills/code-review", description: "Review a change", source: "skill" },
+      { name: "review", description: "Extension review", source: "extension" },
+    ]);
+  });
+
+  test("falls back to older get_commands only when the current catalog RPC is unsupported", async () => {
+    const client = await fixture(`if(cmd.type==='get_available_commands')output({type:'response',id:cmd.id,command:cmd.type,success:false,error:'Unknown command: get_available_commands'});else if(cmd.type==='get_commands')output({type:'response',id:cmd.id,command:cmd.type,success:true,data:{commands:[{name:'summary',source:'prompt',description:'Summarize',location:'project',path:'/private/prompt.md'}]}});`);
+    await client.start();
+    expect(typeof (client as any).getCommands).toBe("function");
+    expect(await client.getCommands()).toEqual([{ name: "summary", source: "prompt", description: "Summarize" }]);
+  });
+
+  test("catalog errors stay errors without silently changing discovery mechanisms", async () => {
+    const client = await fixture(`output({type:'response',id:cmd.id,command:cmd.type,success:false,error:cmd.type==='get_available_commands'?'Failed to load commands':'WRONG FALLBACK'});`);
+    await client.start();
+    expect(typeof (client as any).getCommands).toBe("function");
+    await expect(client.getCommands()).rejects.toThrow("Failed to load commands");
+  });
+
+  test("catalog normalization removes malformed entries and keeps runtime precedence", async () => {
+    const client = await fixture(`output({type:'response',id:cmd.id,command:cmd.type,success:true,data:{commands:[null,{},42,{name:''},{name:'bad\\nname'},{name:'run',source:'builtin',description:'First'},{name:'run',source:'custom',description:'Shadowed'},{name:'skill:plugin/run',source:'future-source',description:4,aliases:['ok',null,'bad alias']},{name:'future',source:'future-source',content:'PRIVATE',input:{hint:3},subcommands:[{name:'status',description:'Status',usage:'status',body:'PRIVATE'},{name:''}]}]}});`);
+    await client.start();
+    expect(typeof (client as any).getCommands).toBe("function");
+    expect(await client.getCommands()).toEqual([
+      { name: "run", source: "builtin", description: "First" },
+      { name: "skill:plugin/run", source: "skill", aliases: ["ok"] },
+      { name: "future", source: "unknown", subcommands: [{ name: "status", description: "Status", usage: "status" }] },
+    ]);
+  });
+
+  test("a malformed catalog response is reported instead of looking like no commands", async () => {
+    const client = await fixture(`output({type:'response',id:cmd.id,command:cmd.type,success:true,data:{commands:'invalid'}});`);
+    await client.start();
+    expect(typeof (client as any).getCommands).toBe("function");
+    await expect(client.getCommands()).rejects.toThrow(/invalid command catalog/i);
+  });
+
   test("launches rpc-ui and correlates concurrent responses by string IDs", async () => {
     const client = await fixture(`setTimeout(()=>output({type:'response',id:cmd.id,command:cmd.type,success:true,data:{idType:typeof cmd.id,args:process.argv,value:cmd.value}}), cmd.value===1?30:1);`);
     await client.start();
